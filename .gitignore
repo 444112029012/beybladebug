@@ -1,0 +1,8 @@
+.clasp.json
+.env
+.env.*
+*.pem
+*.key
+tmp-*.json
+.DS_Store
+Thumbs.db
