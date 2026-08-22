@@ -49,6 +49,20 @@ const FUNBOX_BEYBLADE = {
   collections: ['XIKBXA', 'XIKBXB', 'XIKBXC', 'XIKBXD', 'XIKBXP', 'XIKBBB', 'XIKBAA', 'XIKBCC', 'XIKBCD', 'KB2X'],
 };
 
+const MM_ORIGIN = 'https://mmtoyshop.com';
+const MM_CATEGORY_MAX_PAGES = 5;
+const MM_JSON_HEADERS = {
+  Accept: 'application/json, text/plain, */*',
+  'X-Requested-With': 'XMLHttpRequest',
+  Referer: MM_ORIGIN + '/',
+  'Accept-Language': 'zh-TW,zh;q=0.9,en;q=0.8',
+};
+const MM_BEYBLADE = {
+  url: MM_ORIGIN + '/category/' + encodeURIComponent('🌀戰鬥陀螺'),
+  slug: '🌀戰鬥陀螺',
+  name: 'MM 小舖 > 🌀 戰鬥陀螺',
+};
+
 const AMAZON_ORIGIN = 'https://www.amazon.co.jp';
 const AMAZON_SEARCH_MAX_PAGES = 2;
 const AMAZON_FETCH_HEADERS = {
@@ -70,7 +84,7 @@ function onOpen() {
     .addItem('Send status to Telegram', 'sendWatchStatusToTelegram')
     .addItem('Find Telegram chat ID', 'findTelegramChatId')
     .addItem('Diagnose selected rule URL', 'diagnoseSelectedRule')
-    .addItem('Probe selected momo, Funbox or Amazon rule', 'probeSelectedMomoProduct')
+    .addItem('Probe selected momo, Funbox, Amazon or MM rule', 'probeSelectedMomoProduct')
     .addItem('Check all watch rules now', 'checkMomoProductRules')
     .addItem('Install repeating 1-minute check', 'installMomoTrigger1Min')
     .addItem('Install repeating 5-minute check', 'installMomoTrigger5Min')
@@ -115,12 +129,17 @@ function setupSpreadsheet() {
       'BEYBLADE,ベイブレード,BX-,UX-,CX-', '中古,used,パズル,ジグソー,LEGO,レゴ,たまごっち', '', 'New or in stock', '', 'Pending probe',
       'Amazon.co.jp sold-by-Amazon search for ベイブレードX. Discovers new ASINs; first probe may fail if Amazon returns a robot check to Apps Script.',
     ]);
+    rules.appendRow([
+      true, 'MM', MM_BEYBLADE.url,
+      'BEYBLADE,戰鬥陀螺,爆旋陀螺,BX-,UX-,CX-', 'used,中古,收納,戰鬥盤,陀螺盤', '', 'New or in stock', '', 'Pending probe',
+      'mmtoyshop.com 戰鬥陀螺 category. Watch #不補 specs only, ignore 客訂. In stock if 不補 quantity > 0 and the button is not 補貨中. Probe may fail if Cloudflare blocks Apps Script.',
+    ]);
   }
   rules.setFrozenRows(1);
   SpreadsheetApp.getUi().alert(
-    'Setup complete. Rows watch momo, Funbox 直營, and Amazon.co.jp ベイブレードX (sold by Amazon). '
-    + 'If this Sheet was already initialized, add an Amazon row yourself: Platform Amazon, URL '
-    + AMAZON_BEYBLADE_SEARCH.url
+    'Setup complete. Rows watch momo, Funbox 直營, Amazon.co.jp, and MM 小舖. '
+    + 'If this Sheet was already initialized, add an MM row yourself: Platform MM, URL '
+    + MM_BEYBLADE.url
   );
 }
 
@@ -159,19 +178,19 @@ function pollTelegramCommands_() {
 
 function ensureTelegramBotCommands_(token) {
   const props = PropertiesService.getScriptProperties();
-  if (props.getProperty('TELEGRAM_COMMANDS_SET') === '2') return;
+  if (props.getProperty('TELEGRAM_COMMANDS_SET') === '3') return;
   UrlFetchApp.fetch(`https://api.telegram.org/bot${token}/setMyCommands`, {
     method: 'post',
     contentType: 'application/json',
     payload: JSON.stringify({
       commands: [
-        { command: 'status', description: '查看 momo / Funbox / Amazon 運作狀況' },
+        { command: 'status', description: '查看 momo / Funbox / Amazon / MM 運作狀況' },
         { command: 'help', description: '可用指令' },
       ],
     }),
     muteHttpExceptions: true,
   });
-  props.setProperty('TELEGRAM_COMMANDS_SET', '2');
+  props.setProperty('TELEGRAM_COMMANDS_SET', '3');
 }
 
 function telegramCommand_(text) {
@@ -186,7 +205,7 @@ function telegramCommand_(text) {
 function telegramHelpText_() {
   return [
     'Beyblade watcher 指令',
-    '/status 或「狀況」— 查看 momo / Funbox / Amazon 最近檢查是否有在跑',
+    '/status 或「狀況」— 查看 momo / Funbox / Amazon / MM 最近檢查是否有在跑',
     '/help — 顯示這段說明',
     '補貨與新品仍會自動推播。機器人只在每次定時檢查時讀取訊息，回覆最多會晚一個檢查間隔。',
     '若要立刻看到狀況，也可在試算表用 Beyblade Watcher > Send status to Telegram。',
@@ -209,11 +228,11 @@ function buildWatchStatusText_() {
   }
   const rules = sheet.getRange(2, 1, sheet.getLastRow() - 1, RULE_HEADERS.length).getValues()
     .map((values, index) => ruleFromRow_(index + 2, values))
-    .filter((rule) => /momo|funbox|amazon/i.test(rule.platform));
+    .filter((rule) => /momo|funbox|amazon/i.test(rule.platform) || isMmPlatform_(rule.platform));
   const enabled = rules.filter((rule) => rule.enabled);
   const staleAfterMs = watchStaleAfterMs_();
   if (!enabled.length) {
-    lines.push('沒有已啟用的 momo / Funbox / Amazon 規則。');
+    lines.push('沒有已啟用的 momo / Funbox / Amazon / MM 規則。');
   }
   enabled.forEach((rule) => {
     const lastMs = watchLastCheckedMs_(rule.lastChecked);
@@ -235,8 +254,8 @@ function describeWatchTrigger_() {
   if (!installed) return '定時檢查：未安裝。請用選單 Install repeating check。';
   const minutes = PropertiesService.getScriptProperties().getProperty('WATCH_TRIGGER_MINUTES');
   return minutes
-    ? `定時檢查：約每 ${minutes} 分鐘（checkMomoProductRules，含 momo、Funbox 與 Amazon）`
-    : '定時檢查：已安裝（checkMomoProductRules，含 momo、Funbox 與 Amazon）';
+    ? `定時檢查：約每 ${minutes} 分鐘（checkMomoProductRules，含 momo、Funbox、Amazon 與 MM 小舖）`
+    : '定時檢查：已安裝（checkMomoProductRules，含 momo、Funbox、Amazon 與 MM 小舖）';
 }
 
 function watchStaleAfterMs_() {
@@ -331,7 +350,11 @@ function probeSelectedMomoProduct() {
     probeSelectedAmazonRule_(rule);
     return;
   }
-  if (!/momo/i.test(rule.platform)) throw new Error('Set Platform to Momo, Funbox, or Amazon before using this probe.');
+  if (isMmPlatform_(rule.platform)) {
+    probeSelectedMmRule_(rule);
+    return;
+  }
+  if (!/momo/i.test(rule.platform)) throw new Error('Set Platform to Momo, Funbox, Amazon, or MM before using this probe.');
   if (parseMomoCategory_(rule.url)) {
     const result = fetchMomoCategoryListings_(rule);
     const matched = result.products.filter((product) => applyMomoFilters_(product, rule).matched);
@@ -382,12 +405,28 @@ function probeSelectedAmazonRule_(rule) {
   SpreadsheetApp.getUi().alert(summary);
 }
 
+function probeSelectedMmRule_(rule) {
+  if (parseMmListing_(rule.url)) {
+    const result = fetchMmListing_(rule);
+    const matched = result.products.filter((product) => applyMomoFilters_(product, rule).matched);
+    const summary = formatMmListingSummary_(result, matched);
+    appendDiagnostic_('MM category probe', result.url, result, summary);
+    updateRuleCheck_(rule.row, summary);
+    SpreadsheetApp.getUi().alert(summary);
+    return;
+  }
+  const { product, filter } = evaluateMmRule_(rule);
+  const summary = formatMmSummary_(product, filter);
+  appendDiagnostic_('MM product probe', product.url, product, summary);
+  updateRuleCheck_(rule.row, summary);
+  SpreadsheetApp.getUi().alert(summary);
+}
+
 /**
- * Checks enabled Momo, Funbox, and Amazon.co.jp rules. Category/search rows
- * discover listings. Product rows watch known SKUs. Telegram is sent when a
- * matching product is newly listed after a baseline, or when a known SKU
- * moves into IN_STOCK. After the check, unread Telegram commands such as
- * /status are processed.
+ * Checks enabled Momo, Funbox, Amazon.co.jp, and MM 小舖 rules. Category/search
+ * rows discover listings. Product rows watch known SKUs. Telegram is sent when
+ * filters match and the product is IN_STOCK. After the check, unread Telegram
+ * commands such as /status are processed.
  */
 function checkMomoProductRules() {
   resetProductRowIndex_();
@@ -404,7 +443,8 @@ function checkMomoProductRules() {
       const isMomo = /momo/i.test(rule.platform);
       const isFunbox = /funbox/i.test(rule.platform);
       const isAmazon = /amazon/i.test(rule.platform);
-      if (!isMomo && !isFunbox && !isAmazon) return;
+      const isMm = isMmPlatform_(rule.platform);
+      if (!isMomo && !isFunbox && !isAmazon && !isMm) return;
 
       const isMomoCategory = isMomo && !!parseMomoCategory_(rule.url);
       const isMomoProduct = isMomo && !!parseMomoProductId_(rule.url);
@@ -412,8 +452,10 @@ function checkMomoProductRules() {
       const isFunboxProduct = isFunbox && !!parseFunboxProductHandle_(rule.url);
       const isAmazonSearch = isAmazon && !!parseAmazonSearch_(rule.url);
       const isAmazonProduct = isAmazon && !!parseAmazonAsin_(rule.url);
+      const isMmListing = isMm && !!parseMmListing_(rule.url);
+      const isMmProduct = isMm && !!parseMmProductHandle_(rule.url);
       if (!isMomoCategory && !isMomoProduct && !isFunboxCategory && !isFunboxProduct
-        && !isAmazonSearch && !isAmazonProduct) return;
+        && !isAmazonSearch && !isAmazonProduct && !isMmListing && !isMmProduct) return;
 
       checked += 1;
       try {
@@ -422,7 +464,9 @@ function checkMomoProductRules() {
         else if (isFunboxCategory) notified += checkFunboxCategoryRule_(rule, props);
         else if (isFunboxProduct) notified += checkFunboxProductRule_(rule, props);
         else if (isAmazonSearch) notified += checkAmazonSearchRule_(rule, props);
-        else notified += checkAmazonProductRule_(rule, props);
+        else if (isAmazonProduct) notified += checkAmazonProductRule_(rule, props);
+        else if (isMmListing) notified += checkMmListingRule_(rule, props);
+        else notified += checkMmProductRule_(rule, props);
       } catch (error) {
         updateRuleCheck_(rule.row, `Check failed: ${error.message}`);
       }
@@ -434,7 +478,7 @@ function checkMomoProductRules() {
     // Command polling must not fail the product check.
   }
   try {
-    SpreadsheetApp.getUi().alert(`Checked ${checked} momo/Funbox/Amazon rule(s); sent ${notified} notification(s).`);
+    SpreadsheetApp.getUi().alert(`Checked ${checked} momo/Funbox/Amazon/MM rule(s); sent ${notified} notification(s).`);
   } catch (error) {
     // Time-based executions have no spreadsheet UI.
   }
@@ -513,6 +557,33 @@ function checkAmazonSearchRule_(rule, props) {
   return notified;
 }
 
+function checkMmProductRule_(rule, props) {
+  const { product, filter } = evaluateMmRule_(rule);
+  const stateKey = `MM_PRODUCT_STATE_${product.productId}`;
+  const previousRaw = props.getProperty(stateKey);
+  const notified = recordAndNotifyInStock_(props, stateKey, product, filter, (kind) => formatMmTelegram_(product, kind));
+  updateRuleCheck_(rule.row, formatInStockFilterNote_(formatMmSummary_(product, filter), previousRaw, product, filter));
+  return notified;
+}
+
+function checkMmListingRule_(rule, props) {
+  const listing = fetchMmListing_(rule);
+  let notified = 0;
+  const skipNotes = [];
+  listing.products.forEach((product) => {
+    const filter = applyMomoFilters_(product, rule);
+    const stateKey = `MM_PRODUCT_STATE_${product.productId}`;
+    notified += recordAndNotifyInStock_(props, stateKey, product, filter, (kind) => formatMmTelegram_(product, kind, listing.path));
+    if (!(filter.matched && product.stockState === 'IN_STOCK') && skipNotes.length < 4) {
+      skipNotes.push(telegramSkipNote_(product, filter));
+    }
+  });
+  const matched = listing.products.filter((product) => applyMomoFilters_(product, rule).matched);
+  const summary = `${formatMmListingSummary_(listing, matched)} notified=${notified}.${skipNotes.length ? ` no telegram: ${skipNotes.join('; ')}` : ''}`;
+  updateRuleCheck_(rule.row, summary);
+  return notified;
+}
+
 function installMomoTrigger1Min() {
   installMomoTrigger_(1);
 }
@@ -535,7 +606,7 @@ function installMomoTrigger_(minutes) {
   ScriptApp.newTrigger('checkMomoProductRules').timeBased().everyMinutes(minutes).create();
   PropertiesService.getScriptProperties().setProperty('WATCH_TRIGGER_MINUTES', String(minutes));
   SpreadsheetApp.getUi().alert(
-    `Installed a repeating momo + Funbox + Amazon check about every ${minutes} minute(s). `
+    `Installed a repeating momo + Funbox + Amazon + MM check about every ${minutes} minute(s). `
     + 'It keeps running on Google\'s servers after you close the spreadsheet. '
     + 'Closing the spreadsheet does not stop it. Use Beyblade Watcher > Stop repeating check when you want it to stop. '
     + 'A free Gmail account has about 90 minutes of trigger runtime per day; if Executions start failing, switch to 5 minutes.'
@@ -604,21 +675,28 @@ function probeSelectedEsliteSearch() {
 }
 
 function diagnoseUrl_(platform, url) {
-  const fetchUrl = parseMomoProductId_(url)
-    ? canonicalMomoProductUrl_(parseMomoProductId_(url))
-    : url;
-  const response = UrlFetchApp.fetch(fetchUrl, {
-    method: 'get',
-    followRedirects: true,
-    muteHttpExceptions: true,
-    headers: { Accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8' },
-  });
+  const mmListing = parseMmListing_(url);
+  const mmHandle = parseMmProductHandle_(url);
+  const fetchUrl = mmHandle
+    ? `${MM_ORIGIN}/item/query/${encodeURIComponent(mmHandle)}`
+    : mmListing
+      ? mmListingQueryUrl_(mmListing, 1)
+      : (parseMomoProductId_(url) ? canonicalMomoProductUrl_(parseMomoProductId_(url)) : url);
+  const request = mmHandle || mmListing
+    ? mmJsonRequest_(fetchUrl)
+    : {
+      method: 'get',
+      followRedirects: true,
+      muteHttpExceptions: true,
+      headers: { Accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8' },
+    };
+  const response = UrlFetchApp.fetch(fetchUrl, request);
   const body = response.getContentText();
   const contentType = response.getHeaders()['Content-Type'] || '';
   const signals = [];
   if (/application\/ld\+json/i.test(body)) signals.push('JSON-LD');
   if (/\"price\"|\"offers\"|price|sale price|product:price/i.test(body)) signals.push('Price candidate');
-  if (/inStock|outOfStock|stock|availability|product:availability/i.test(body)) signals.push('Stock candidate');
+  if (/inStock|outOfStock|stock|quantity|pre_order|availability|product:availability/i.test(body)) signals.push('Stock candidate');
   if (/<title[^>]*>/i.test(body)) signals.push('HTML title');
   if (/captcha|access denied|forbidden|verify you are human/i.test(body)) signals.push('Possible protection page');
 
@@ -1129,6 +1207,268 @@ function formatFunboxCategorySummary_(listing, matched) {
     return `${path}: 0 official goods listed (${listing.emptyReason || 'empty'}).`;
   }
   return `${path}: ${listing.products.length} official goods, ${matched.length} matched filters. ${formatQuantityPreview_(listing.products)}`;
+}
+
+function isMmPlatform_(platform) {
+  return /^(mm|mm小舖|m\.?m\s*小舖|mmtoyshop)$/i.test(String(platform || '').trim());
+}
+
+function decodeMmComponent_(value) {
+  try {
+    return decodeURIComponent(String(value || '').replace(/\+/g, ' '));
+  } catch (error) {
+    return String(value || '');
+  }
+}
+
+function parseMmProductHandle_(url) {
+  const text = String(url || '');
+  if (/https?:\/\//i.test(text) && !/mmtoyshop\.com/i.test(text)) return '';
+  return firstMatch_(text, /\/(?:item|products)\/([^/?#]+)/i);
+}
+
+function parseMmListing_(url) {
+  const text = String(url || '').trim();
+  if (!/mmtoyshop\.com/i.test(text)) return null;
+  if (parseMmProductHandle_(text)) return null;
+  const keyword = firstMatch_(text, /[?&]keyword=([^&]+)/i);
+  if (keyword) {
+    const decoded = decodeMmComponent_(keyword);
+    return {
+      kind: 'search',
+      keyword: decoded,
+      slug: '',
+      url: `${MM_ORIGIN}/category?keyword=${encodeURIComponent(decoded)}`,
+      path: `MM 小舖搜尋 ${decoded}`,
+      pathKey: `kw:${decoded}`,
+    };
+  }
+  const slug = firstMatch_(text, /\/category\/([^/?#]+)/i);
+  if (!slug || /^query$/i.test(slug)) return null;
+  const decoded = decodeMmComponent_(slug);
+  return {
+    kind: 'category',
+    keyword: '',
+    slug: decoded,
+    url: `${MM_ORIGIN}/category/${encodeURIComponent(decoded)}`,
+    path: decoded === MM_BEYBLADE.slug ? MM_BEYBLADE.name : `MM 小舖 > ${decoded}`,
+    pathKey: `cat:${decoded}`,
+  };
+}
+
+function canonicalMmProductUrl_(handle) {
+  return `${MM_ORIGIN}/item/${handle}`;
+}
+
+function mmListingQueryUrl_(listing, page) {
+  if (listing.kind === 'search') {
+    return `${MM_ORIGIN}/category/query?${toQueryString_({ keyword: listing.keyword, page })}`;
+  }
+  const base = `${MM_ORIGIN}/category/query/${encodeURIComponent(listing.slug)}`;
+  return page > 1 ? `${base}?page=${page}` : base;
+}
+
+function mmJsonRequest_(url) {
+  return {
+    url,
+    method: 'get',
+    followRedirects: true,
+    muteHttpExceptions: true,
+    headers: MM_JSON_HEADERS,
+  };
+}
+
+function mmIsProtected_(body, statusCode) {
+  if (statusCode === 403 || statusCode === 429 || statusCode === 503) return true;
+  return /cf-browser-verification|just a moment|attention required|challenge-platform|cloudflare/i.test(String(body || ''));
+}
+
+function parseMmJsonResponse_(response, url) {
+  const body = response.getContentText() || '';
+  const statusCode = response.getResponseCode();
+  if (mmIsProtected_(body, statusCode)) {
+    throw new Error('MM 小舖 returned a Cloudflare or blocked page. Disable this row until Apps Script can reach the public JSON.');
+  }
+  if (statusCode < 200 || statusCode >= 300) {
+    throw new Error(`MM 小舖 returned HTTP ${statusCode} for ${url}`);
+  }
+  let json;
+  try {
+    json = JSON.parse(body);
+  } catch (error) {
+    throw new Error(`MM 小舖 did not return JSON for ${url}`);
+  }
+  return {
+    json,
+    statusCode,
+    bytes: body.length,
+    contentType: response.getHeaders()['Content-Type'] || '',
+  };
+}
+
+function fetchMmJson_(url) {
+  const response = UrlFetchApp.fetch(url, mmJsonRequest_(url));
+  return parseMmJsonResponse_(response, url);
+}
+
+function fetchMmJsonAll_(urls) {
+  if (!urls.length) return [];
+  const responses = UrlFetchApp.fetchAll(urls.map((url) => mmJsonRequest_(url)));
+  return responses.map((response, index) => parseMmJsonResponse_(response, urls[index]));
+}
+
+function mmSpecName_(spec) {
+  return String((spec && (spec.option_name || spec.size_name || spec.name)) || '');
+}
+
+function mmTrackedSpecs_(item) {
+  const specs = (item && item.specs) || [];
+  if (!specs.length) return null;
+  return specs.filter((spec) => {
+    const name = mmSpecName_(spec);
+    return /不補/.test(name) && !/客訂/.test(name);
+  });
+}
+
+function mmQuantity_(item) {
+  const tracked = mmTrackedSpecs_(item);
+  if (tracked) {
+    if (!tracked.length) return 0;
+    let total = 0;
+    let counted = false;
+    tracked.forEach((spec) => {
+      const qty = Number(spec.quantity);
+      if (!isNaN(qty)) {
+        counted = true;
+        total += qty;
+      }
+    });
+    return counted ? total : 0;
+  }
+  const qty = Number(item && item.quantity);
+  return isNaN(qty) ? '' : qty;
+}
+
+function mmPrice_(item) {
+  const price = item && (item.shownPrice !== undefined && item.shownPrice !== null && item.shownPrice !== ''
+    ? item.shownPrice
+    : item.price);
+  return price !== undefined && price !== null && price !== '' ? `NT$${price}` : '';
+}
+
+function mmSoldoutHint_(item) {
+  return cleanText_(item && item.soldout_hint);
+}
+
+function mmStockState_(item) {
+  const qty = mmQuantity_(item);
+  const restocking = /補貨中/.test(mmSoldoutHint_(item));
+  if (restocking || qty === '' || Number(qty) <= 0) return 'OUT_OF_STOCK';
+  return 'IN_STOCK';
+}
+
+function mmItemToProduct_(item) {
+  const prod = (item && item.prod) || item || {};
+  const handle = String(prod.route || '').trim();
+  const productId = String(prod.id || handle || '');
+  if (!productId) return null;
+  const quantity = mmQuantity_(prod);
+  return {
+    platform: 'MM',
+    productId,
+    url: handle ? canonicalMmProductUrl_(handle) : `${MM_ORIGIN}/category/${encodeURIComponent(MM_BEYBLADE.slug)}`,
+    name: cleanText_(prod.title || ''),
+    price: mmPrice_(prod),
+    quantity,
+    stockState: mmStockState_(prod),
+    signals: [
+      'MM listing',
+      quantity === '' ? '' : `qty:${quantity}`,
+      mmSoldoutHint_(prod) ? `button:${mmSoldoutHint_(prod)}` : '',
+      (prod.specs || []).length ? `不補 specs:${(mmTrackedSpecs_(prod) || []).length}` : '',
+      prod.pre_order ? 'preorder' : '',
+    ].filter(Boolean),
+  };
+}
+
+function evaluateMmRule_(rule) {
+  const product = fetchMmProduct_(rule.url);
+  return { product, filter: applyMomoFilters_(product, rule) };
+}
+
+function fetchMmProduct_(url) {
+  const handle = parseMmProductHandle_(url);
+  if (!handle) {
+    throw new Error('Paste an MM 小舖 product URL, for example https://mmtoyshop.com/item/handle');
+  }
+  const fetched = fetchMmJson_(`${MM_ORIGIN}/item/query/${encodeURIComponent(handle)}`);
+  const product = mmItemToProduct_((fetched.json && fetched.json.response) || fetched.json || {});
+  if (!product) throw new Error(`MM 小舖 product JSON did not include item ${handle}.`);
+  product.statusCode = fetched.statusCode;
+  product.contentType = fetched.contentType;
+  product.bytes = fetched.bytes;
+  product.signals = [product.stockState, product.name ? 'Product name' : '', product.price ? 'Price' : ''].filter(Boolean);
+  return product;
+}
+
+function fetchMmListing_(rule) {
+  const listing = parseMmListing_(rule.url);
+  if (!listing) throw new Error('This is not an MM 小舖 category or search URL.');
+  const first = fetchMmJson_(mmListingQueryUrl_(listing, 1));
+  const pageJsons = [first.json];
+  const lastPage = Math.min(Number(first.json && first.json.lastPage) || 1, MM_CATEGORY_MAX_PAGES);
+  if (lastPage > 1) {
+    const urls = [];
+    for (let page = 2; page <= lastPage; page++) urls.push(mmListingQueryUrl_(listing, page));
+    fetchMmJsonAll_(urls).forEach((fetched) => pageJsons.push(fetched.json));
+  }
+  const products = [];
+  const seen = {};
+  let bytes = first.bytes;
+  pageJsons.forEach((pageJson, index) => {
+    if (index > 0) bytes += JSON.stringify(pageJson || {}).length;
+    ((pageJson && pageJson.products) || []).forEach((item) => {
+      const product = mmItemToProduct_(item);
+      if (!product || seen[product.productId]) return;
+      seen[product.productId] = true;
+      products.push(product);
+    });
+  });
+  return {
+    url: listing.url,
+    path: listing.path,
+    pathKey: listing.pathKey,
+    statusCode: first.statusCode,
+    contentType: 'application/json',
+    bytes,
+    products,
+    empty: products.length === 0,
+    emptyReason: products.length === 0 ? 'no listed goods in this MM 小舖 category' : '',
+    signals: [
+      products.length ? `${products.length} MM goods` : 'Empty MM category',
+      `pages:${pageJsons.length}`,
+    ],
+  };
+}
+
+function formatMmSummary_(product, filter) {
+  const filterText = filter.matched
+    ? 'filters matched'
+    : `filters missed (${filter.reasons.join('; ')})`;
+  const qtyText = hasQuantity_(product) ? `qty ${product.quantity}` : 'qty not parsed';
+  return `MM product ${product.productId}: ${product.stockState}; ${qtyText}; ${product.name || 'name not parsed'}; ${product.price || 'price not parsed'}; ${filterText}.`;
+}
+
+function formatMmTelegram_(product, kind, categoryPath) {
+  return formatUserStockTelegram_('MM小舖', kind, product.name || `商品 ${product.productId}`, product, product.url);
+}
+
+function formatMmListingSummary_(listing, matched) {
+  const path = listing.path || 'MM 小舖 category';
+  if (listing.empty) {
+    return `${path}: 0 goods listed (${listing.emptyReason || 'empty'}).`;
+  }
+  return `${path}: ${listing.products.length} goods, ${matched.length} matched filters. ${formatQuantityPreview_(listing.products)}`;
 }
 
 function evaluateAmazonRule_(rule) {

@@ -2,6 +2,8 @@
 
 This trial uses a Google Sheet as its setup and diagnostic surface. Apps Script retrieves public HTTP responses, records connection diagnostics, and sends Telegram notifications. It does not bypass logins, CAPTCHAs, or website protections.
 
+A **local Node watcher** lives in [local/](local/README.md). It runs the same shops asynchronously on your computer, with a configurable interval, and prints to the terminal plus Telegram. Use that if you want shorter intervals than Apps Script quotas allow.
+
 ## Setup
 
 1. Create a Google Sheet. Choose **Extensions > Apps Script**.
@@ -9,7 +11,7 @@ This trial uses a Google Sheet as its setup and diagnostic surface. Apps Script 
 3. Use **Beyblade Watcher > Initialize sheets**.
 4. In Telegram, use `@BotFather` to create a bot and obtain its token. Send `/start` to the new bot.
 5. In Apps Script **Project Settings > Script Properties**, add `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
-6. Run **Test Telegram notification**. Then select a watch row and run **Probe selected momo, Funbox or Amazon rule**.
+6. Run **Test Telegram notification**. Then select a watch row and run **Probe selected momo, Funbox, Amazon or MM rule**.
 
 Do not run `onOpen` from the Apps Script editor. It is a simple trigger that runs when the **Google Sheet-bound** project opens. Create the project from the Sheet via **Extensions > Apps Script**, save the code, then reload the Sheet to see the Beyblade Watcher menu. To configure Telegram safely, add only `TELEGRAM_BOT_TOKEN` first, send `/start` to the bot, then use **Find Telegram chat ID** from that menu and add the displayed value as `TELEGRAM_CHAT_ID`.
 
@@ -83,7 +85,7 @@ Add a **Watch Rules** row if this Sheet was already initialized:
 
 Optional: paste a known Funbox product URL (`https://shop.funbox.com.tw/products/{handle}`) with Platform `Funbox` to watch one SKU the same way as a momo product page.
 
-Select the Funbox row and run **Probe selected momo, Funbox or Amazon rule**. Expect `0 official goods listed` while the shop is empty. Then run **Check all watch rules now** once so the empty baseline is stored. The existing repeating trigger also covers Funbox; you do not need a second trigger.
+Select the Funbox row and run **Probe selected momo, Funbox, Amazon or MM rule**. Expect `0 official goods listed` while the shop is empty. Then run **Check all watch rules now** once so the empty baseline is stored. The existing repeating trigger also covers Funbox; you do not need a second trigger.
 
 If a Funbox title omits `BEYBLADE` / `戰鬥陀螺`, clear **Include keywords** on that row. The XI/KB category is already Beyblade-only.
 
@@ -103,11 +105,31 @@ Add a **Watch Rules** row if this Sheet was already initialized:
 
 Optional: paste `https://www.amazon.co.jp/dp/{ASIN}` with Platform `Amazon` to watch one known product. Stock on a product page is only used when the public HTML has a clear add-to-cart or unavailable signal; a Taiwan/export buy box may parse as `UNKNOWN` and will not Telegram.
 
-**Important:** Amazon often returns a robot-check page to Google Apps Script IPs. After pasting the new `Code.gs`, select the Amazon row and run **Probe selected momo, Funbox or Amazon rule**. If Status says robot-check or blocked, leave that row disabled. Do not try to bypass Amazon protection.
+**Important:** Amazon often returns a robot-check page to Google Apps Script IPs. After pasting the new `Code.gs`, select the Amazon row and run **Probe selected momo, Funbox, Amazon or MM rule**. If Status says robot-check or blocked, leave that row disabled. Do not try to bypass Amazon protection.
 
 If the probe succeeds, run **Check all watch rules now** once so current ASINs become the baseline; later matching in-stock results can notify. The existing repeating trigger also covers Amazon.
 
 Amazon HTML is large. Stay on a **5-minute** interval rather than 1 minute.
+
+## MM 小舖
+
+MM 小舖 is a public BV Shop storefront. Watch the **戰鬥陀螺** category, not site-wide keyword search:
+
+`https://mmtoyshop.com/category/🌀戰鬥陀螺`
+
+Add a **Watch Rules** row if this Sheet was already initialized:
+
+| Enabled | Platform | Product or search URL | Include keywords | Exclude keywords |
+| --- | --- | --- | --- | --- |
+| TRUE | MM | the category URL above | `BEYBLADE,戰鬥陀螺,爆旋陀螺,BX-,UX-,CX-` | `used,中古,收納,戰鬥盤,陀螺盤` |
+
+Optional: paste `https://mmtoyshop.com/item/{handle}` with Platform `MM` to watch one product.
+
+MM listings are usually pre-order. Do **not** exclude `預購` in the title, and do **not** put `不補` in Include keywords: that word is on the option name, not the title. The watcher only sums specs whose name contains **不補**, and ignores **客訂** options. A listing is in stock only when that 不補 quantity is **greater than 0** and the bottom button is not **補貨中**. Extra pages after page 1 are fetched in parallel.
+
+**Cloudflare:** Apps Script may get HTTP 403. After pasting the new `Code.gs`, select the MM row and run **Probe selected momo, Funbox, Amazon or MM rule**. If Status says Cloudflare or blocked, leave that row disabled. Do not try to bypass the protection.
+
+If the probe succeeds, run **Check all watch rules now** once. The existing repeating trigger also covers MM.
 
 ## Diagnosis outcome
 

@@ -1,6 +1,10 @@
 .clasp.json
 .env
 .env.*
+!.env.example
+!local/env.example
+local/node_modules/
+local/data/
 *.pem
 *.key
 tmp-*.json

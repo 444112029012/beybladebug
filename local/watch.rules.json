@@ -1,0 +1,38 @@
+{
+  "intervalSeconds": 10,
+  "notifyEveryInStock": true,
+  "rules": [
+    {
+      "enabled": true,
+      "platform": "Momo",
+      "url": "https://www.momoshop.com.tw/categories/2186500036",
+      "include": "BEYBLADE,戰鬥陀螺,爆旋陀螺",
+      "exclude": "used,中古,收納,戰鬥盤,陀螺盤",
+      "maxPrice": ""
+    },
+    {
+      "enabled": true,
+      "platform": "Funbox",
+      "url": "https://shop.funbox.com.tw/categories/XB/RU",
+      "include": "",
+      "exclude": "",
+      "maxPrice": ""
+    },
+    {
+      "enabled": false,
+      "platform": "Amazon",
+      "url": "https://www.amazon.co.jp/s?k=%E3%83%99%E3%82%A4%E3%83%96%E3%83%AC%E3%83%BC%E3%83%89X&i=toys&rh=p_6%3AAN1VRQENFRJN5",
+      "include": "BEYBLADE,ベイブレード,BX-,UX-,CX-",
+      "exclude": "中古,used,パズル,ジグソー,LEGO,レゴ,たまごっち",
+      "maxPrice": ""
+    },
+    {
+      "enabled": true,
+      "platform": "MM",
+      "url": "https://mmtoyshop.com/category/%F0%9F%8C%80%E6%88%B0%E9%AC%A5%E9%99%80%E8%9E%BA",
+      "include": "BEYBLADE,戰鬥陀螺,爆旋陀螺,BX-,UX-,CX-",
+      "exclude": "used,中古,收納,戰鬥盤,陀螺盤",
+      "maxPrice": ""
+    }
+  ]
+}
