@@ -9,6 +9,11 @@ const SHEETS = {
   PRODUCTS: 'Products',
 };
 
+const PRODUCT_HEADERS = [
+  'First seen', 'Last checked', 'Platform', 'Product name', 'Product URL', 'Price',
+  'Stock state', 'Quantity', 'Hash',
+];
+
 const RULE_HEADERS = [
   'Enabled', 'Platform', 'Product or search URL', 'Include keywords', 'Exclude keywords',
   'Maximum price', 'Notify when', 'Last checked', 'Status', 'Notes',
@@ -80,8 +85,8 @@ function setupSpreadsheet() {
   const rules = getOrCreateSheet_(ss, SHEETS.RULES, RULE_HEADERS);
   getOrCreateSheet_(ss, SHEETS.DIAGNOSTICS,
     ['Checked at', 'Platform', 'URL', 'HTTP status', 'Content-Type', 'Response bytes', 'Product signals', 'Summary']);
-  getOrCreateSheet_(ss, SHEETS.PRODUCTS,
-    ['First seen', 'Last checked', 'Platform', 'Product name', 'Product URL', 'Price', 'Stock state', 'Hash']);
+  getOrCreateSheet_(ss, SHEETS.PRODUCTS, PRODUCT_HEADERS);
+  ensureProductsSheet_(ss);
 
   if (rules.getLastRow() === 1) {
     rules.appendRow([
@@ -385,6 +390,7 @@ function probeSelectedAmazonRule_(rule) {
  * /status are processed.
  */
 function checkMomoProductRules() {
+  resetProductRowIndex_();
   const sheet = SpreadsheetApp.getActive().getSheetByName(SHEETS.RULES);
   const props = PropertiesService.getScriptProperties();
   let checked = 0;
@@ -437,54 +443,22 @@ function checkMomoProductRules() {
 function checkMomoProductRule_(rule, props) {
   const { product, filter } = evaluateMomoRule_(rule);
   const stateKey = `MOMO_PRODUCT_STATE_${product.productId}`;
-  const previousState = props.getProperty(stateKey);
-  const summary = formatMomoSummary_(product, filter);
-  updateRuleCheck_(rule.row, summary);
-  if (!previousState || previousState !== product.stockState) appendProductSnapshot_(product);
-
-  let notified = 0;
-  const restocked = previousState
-    && previousState !== product.stockState
-    && product.stockState === 'IN_STOCK';
-  if (restocked && filter.matched) {
-    const result = sendTelegram_(formatMomoTelegram_(product, 'restock'));
-    if (!result.ok) throw new Error(`Telegram: ${result.message}`);
-    notified = 1;
-  } else if (restocked && !filter.matched) {
-    updateRuleCheck_(rule.row, `${summary} Restock seen but filters did not match, so no Telegram was sent.`);
-  }
-  if (product.stockState !== 'UNKNOWN' && previousState !== product.stockState) {
-    props.setProperty(stateKey, product.stockState);
-  }
+  const previousRaw = props.getProperty(stateKey);
+  const notified = recordAndNotifyInStock_(props, stateKey, product, filter, (kind) => formatMomoTelegram_(product, kind));
+  updateRuleCheck_(rule.row, formatInStockFilterNote_(formatMomoSummary_(product, filter), previousRaw, product, filter));
   return notified;
 }
 
 function checkMomoCategoryRule_(rule, props) {
   const listing = fetchMomoCategoryListings_(rule);
-  const seedKey = `MOMO_CATE_SEEDED_${listing.cateCode}`;
-  const seeded = props.getProperty(seedKey) === '1';
   let notified = 0;
   listing.products.forEach((product) => {
     const filter = applyMomoFilters_(product, rule);
     const stateKey = `MOMO_PRODUCT_STATE_${product.productId}`;
-    const previousState = props.getProperty(stateKey);
-    if (!previousState || previousState !== product.stockState) appendProductSnapshot_(product);
-    const isNew = seeded && !previousState && product.stockState === 'IN_STOCK';
-    const restocked = previousState
-      && previousState !== product.stockState
-      && product.stockState === 'IN_STOCK';
-    if (filter.matched && (isNew || restocked)) {
-      const result = sendTelegram_(formatMomoTelegram_(product, isNew ? 'new' : 'restock', listing.path));
-      if (!result.ok) throw new Error(`Telegram: ${result.message}`);
-      notified += 1;
-    }
-    if (product.stockState !== 'UNKNOWN' && previousState !== product.stockState) {
-      props.setProperty(stateKey, product.stockState);
-    }
+    notified += recordAndNotifyInStock_(props, stateKey, product, filter, (kind) => formatMomoTelegram_(product, kind, listing.path));
   });
-  if (!seeded) props.setProperty(seedKey, '1');
   const matched = listing.products.filter((product) => applyMomoFilters_(product, rule).matched);
-  const summary = `${formatMomoCategorySummary_(listing, matched)} seeded=${seeded ? 'yes' : 'baseline stored'}; notified=${notified}.`;
+  const summary = `${formatMomoCategorySummary_(listing, matched)} notified=${notified}.`;
   updateRuleCheck_(rule.row, summary);
   return notified;
 }
@@ -492,54 +466,26 @@ function checkMomoCategoryRule_(rule, props) {
 function checkFunboxProductRule_(rule, props) {
   const { product, filter } = evaluateFunboxRule_(rule);
   const stateKey = `FUNBOX_PRODUCT_STATE_${product.productId}`;
-  const previousState = props.getProperty(stateKey);
-  const summary = formatFunboxSummary_(product, filter);
-  updateRuleCheck_(rule.row, summary);
-  if (!previousState || previousState !== product.stockState) appendProductSnapshot_(product);
-
-  let notified = 0;
-  const restocked = previousState
-    && previousState !== product.stockState
-    && product.stockState === 'IN_STOCK';
-  if (restocked && filter.matched) {
-    const result = sendTelegram_(formatFunboxTelegram_(product, 'restock'));
-    if (!result.ok) throw new Error(`Telegram: ${result.message}`);
-    notified = 1;
-  } else if (restocked && !filter.matched) {
-    updateRuleCheck_(rule.row, `${summary} Restock seen but filters did not match, so no Telegram was sent.`);
-  }
-  if (product.stockState !== 'UNKNOWN' && previousState !== product.stockState) {
-    props.setProperty(stateKey, product.stockState);
-  }
+  const previousRaw = props.getProperty(stateKey);
+  const notified = recordAndNotifyInStock_(props, stateKey, product, filter, (kind) => formatFunboxTelegram_(product, kind));
+  updateRuleCheck_(rule.row, formatInStockFilterNote_(formatFunboxSummary_(product, filter), previousRaw, product, filter));
   return notified;
 }
 
 function checkFunboxCategoryRule_(rule, props) {
   const listing = fetchFunboxCategoryListings_(rule);
-  const seedKey = `FUNBOX_CATE_SEEDED_${listing.pathKey}`;
-  const seeded = props.getProperty(seedKey) === '1';
   let notified = 0;
+  const skipNotes = [];
   listing.products.forEach((product) => {
     const filter = applyMomoFilters_(product, rule);
     const stateKey = `FUNBOX_PRODUCT_STATE_${product.productId}`;
-    const previousState = props.getProperty(stateKey);
-    if (!previousState || previousState !== product.stockState) appendProductSnapshot_(product);
-    const isNew = seeded && !previousState && product.stockState === 'IN_STOCK';
-    const restocked = previousState
-      && previousState !== product.stockState
-      && product.stockState === 'IN_STOCK';
-    if (filter.matched && (isNew || restocked)) {
-      const result = sendTelegram_(formatFunboxTelegram_(product, isNew ? 'new' : 'restock', listing.path));
-      if (!result.ok) throw new Error(`Telegram: ${result.message}`);
-      notified += 1;
-    }
-    if (product.stockState !== 'UNKNOWN' && previousState !== product.stockState) {
-      props.setProperty(stateKey, product.stockState);
+    notified += recordAndNotifyInStock_(props, stateKey, product, filter, (kind) => formatFunboxTelegram_(product, kind, listing.path));
+    if (!(filter.matched && product.stockState === 'IN_STOCK') && skipNotes.length < 4) {
+      skipNotes.push(telegramSkipNote_(product, filter));
     }
   });
-  if (!seeded) props.setProperty(seedKey, '1');
   const matched = listing.products.filter((product) => applyMomoFilters_(product, rule).matched);
-  const summary = `${formatFunboxCategorySummary_(listing, matched)} seeded=${seeded ? 'yes' : 'baseline stored'}; notified=${notified}.`;
+  const summary = `${formatFunboxCategorySummary_(listing, matched)} notified=${notified}.${skipNotes.length ? ` no telegram: ${skipNotes.join('; ')}` : ''}`;
   updateRuleCheck_(rule.row, summary);
   return notified;
 }
@@ -547,54 +493,22 @@ function checkFunboxCategoryRule_(rule, props) {
 function checkAmazonProductRule_(rule, props) {
   const { product, filter } = evaluateAmazonRule_(rule);
   const stateKey = `AMAZON_PRODUCT_STATE_${product.productId}`;
-  const previousState = props.getProperty(stateKey);
-  const summary = formatAmazonSummary_(product, filter);
-  updateRuleCheck_(rule.row, summary);
-  if (!previousState || previousState !== product.stockState) appendProductSnapshot_(product);
-
-  let notified = 0;
-  const restocked = previousState
-    && previousState !== product.stockState
-    && product.stockState === 'IN_STOCK';
-  if (restocked && filter.matched) {
-    const result = sendTelegram_(formatAmazonTelegram_(product, 'restock'));
-    if (!result.ok) throw new Error(`Telegram: ${result.message}`);
-    notified = 1;
-  } else if (restocked && !filter.matched) {
-    updateRuleCheck_(rule.row, `${summary} Restock seen but filters did not match, so no Telegram was sent.`);
-  }
-  if (product.stockState !== 'UNKNOWN' && previousState !== product.stockState) {
-    props.setProperty(stateKey, product.stockState);
-  }
+  const previousRaw = props.getProperty(stateKey);
+  const notified = recordAndNotifyInStock_(props, stateKey, product, filter, (kind) => formatAmazonTelegram_(product, kind));
+  updateRuleCheck_(rule.row, formatInStockFilterNote_(formatAmazonSummary_(product, filter), previousRaw, product, filter));
   return notified;
 }
 
 function checkAmazonSearchRule_(rule, props) {
   const listing = fetchAmazonSearchListings_(rule);
-  const seedKey = `AMAZON_SEARCH_SEEDED_${listing.pathKey}`;
-  const seeded = props.getProperty(seedKey) === '1';
   let notified = 0;
   listing.products.forEach((product) => {
     const filter = applyMomoFilters_(product, rule);
     const stateKey = `AMAZON_PRODUCT_STATE_${product.productId}`;
-    const previousState = props.getProperty(stateKey);
-    if (!previousState || previousState !== product.stockState) appendProductSnapshot_(product);
-    const isNew = seeded && !previousState && product.stockState === 'IN_STOCK';
-    const restocked = previousState
-      && previousState !== product.stockState
-      && product.stockState === 'IN_STOCK';
-    if (filter.matched && (isNew || restocked)) {
-      const result = sendTelegram_(formatAmazonTelegram_(product, isNew ? 'new' : 'restock', listing.path));
-      if (!result.ok) throw new Error(`Telegram: ${result.message}`);
-      notified += 1;
-    }
-    if (product.stockState !== 'UNKNOWN' && previousState !== product.stockState) {
-      props.setProperty(stateKey, product.stockState);
-    }
+    notified += recordAndNotifyInStock_(props, stateKey, product, filter, (kind) => formatAmazonTelegram_(product, kind, listing.path));
   });
-  if (!seeded) props.setProperty(seedKey, '1');
   const matched = listing.products.filter((product) => applyMomoFilters_(product, rule).matched);
-  const summary = `${formatAmazonSearchSummary_(listing, matched)} seeded=${seeded ? 'yes' : 'baseline stored'}; notified=${notified}.`;
+  const summary = `${formatAmazonSearchSummary_(listing, matched)} notified=${notified}.`;
   updateRuleCheck_(rule.row, summary);
   return notified;
 }
@@ -795,28 +709,20 @@ function formatMomoSummary_(product, filter) {
   const filterText = filter.matched
     ? 'filters matched'
     : `filters missed (${filter.reasons.join('; ')})`;
-  return `momo product ${product.productId}: ${product.stockState}; ${product.name || 'name not parsed'}; ${product.price || 'price not parsed'}; ${filterText}.`;
+  const qtyText = hasQuantity_(product) ? `qty ${product.quantity}` : 'qty not parsed';
+  return `momo product ${product.productId}: ${product.stockState}; ${qtyText}; ${product.name || 'name not parsed'}; ${product.price || 'price not parsed'}; ${filterText}.`;
 }
 
 function formatMomoTelegram_(product, kind, categoryPath) {
-  const title = kind === 'new'
-    ? 'momo 正版上架：符合條件且目前有庫存'
-    : 'momo 補貨通知：符合條件且目前有庫存';
-  return [
-    title,
-    categoryPath || '',
-    product.name || `商品編號 ${product.productId}`,
-    product.price ? `價格：${product.price}` : '',
-    product.url,
-  ].filter(Boolean).join('\n');
+  return formatUserStockTelegram_('momo', kind, product.name || `商品 ${product.productId}`, product, product.url);
 }
 
 function formatMomoCategorySummary_(listing, matched) {
   const path = listing.path || `category ${listing.cateCode}`;
   if (listing.empty) {
-    return `${path}: 0 official goods listed (${listing.emptyReason || 'empty'}). New in-stock listings will notify after the baseline.`;
+    return `${path}: 0 official goods listed (${listing.emptyReason || 'empty'}).`;
   }
-  return `${path}: ${listing.products.length} official goods, ${matched.length} matched filters.`;
+  return `${path}: ${listing.products.length} official goods, ${matched.length} matched filters. ${formatQuantityPreview_(listing.products)}`;
 }
 
 function parseMomoCategory_(url) {
@@ -959,9 +865,10 @@ function momoCategoryItemToProduct_(item, category) {
     url: canonicalMomoProductUrl_(productId),
     name: cleanText_(item.goodsName),
     price: item.goodsPrice ? `NT$${item.goodsPrice}` : '',
+    quantity: item.goodsStock === undefined || item.goodsStock === null || item.goodsStock === '' ? '' : stockValue,
     stockState: 'IN_STOCK',
     categoryPath: category.path,
-    signals: ['Official category listing', stockValue ? `stock:${item.goodsStock}` : 'listed'],
+    signals: ['Official category listing', stockValue || stockValue === 0 ? `qty:${item.goodsStock}` : 'listed'],
   };
 }
 
@@ -1012,12 +919,21 @@ function canonicalFunboxProductUrl_(handle) {
 }
 
 function fetchFunboxJson_(url) {
-  const response = UrlFetchApp.fetch(url, {
+  const response = UrlFetchApp.fetch(url, funboxJsonRequest_(url));
+  return parseFunboxJsonResponse_(response, url);
+}
+
+function funboxJsonRequest_(url) {
+  return {
+    url,
     method: 'get',
     followRedirects: true,
     muteHttpExceptions: true,
     headers: FUNBOX_JSON_HEADERS,
-  });
+  };
+}
+
+function parseFunboxJsonResponse_(response, url) {
   const body = response.getContentText() || '';
   const statusCode = response.getResponseCode();
   if (statusCode < 200 || statusCode >= 300) {
@@ -1035,6 +951,20 @@ function fetchFunboxJson_(url) {
     bytes: body.length,
     contentType: response.getHeaders()['Content-Type'] || '',
   };
+}
+
+function fetchFunboxJsonAll_(urls) {
+  if (!urls.length) return [];
+  const responses = UrlFetchApp.fetchAll(urls.map((url) => funboxJsonRequest_(url)));
+  return responses.map((response, index) => parseFunboxJsonResponse_(response, urls[index]));
+}
+
+function funboxCategoryProductsUrl_(path, page) {
+  return `${FUNBOX_SHOP_ORIGIN}/category_products/${path}.json?${toQueryString_({
+    limit: FUNBOX_CATEGORY_LIMIT,
+    page,
+    sort_by: 'sell_from-desc',
+  })}`;
 }
 
 function fetchFunboxProduct_(url) {
@@ -1059,14 +989,12 @@ function fetchFunboxCategoryListings_(rule) {
   const seen = {};
   let statusCode = 200;
   let bytes = 0;
-  paths.forEach((path) => {
-    for (let page = 1; page <= FUNBOX_CATEGORY_MAX_PAGES; page++) {
-      const apiUrl = `${FUNBOX_SHOP_ORIGIN}/category_products/${path}.json?${toQueryString_({
-        limit: FUNBOX_CATEGORY_LIMIT,
-        page,
-        sort_by: 'sell_from-desc',
-      })}`;
-      const fetched = fetchFunboxJson_(apiUrl);
+  let pending = paths.map((path) => ({ path, page: 1 }));
+  while (pending.length) {
+    const urls = pending.map((job) => funboxCategoryProductsUrl_(job.path, job.page));
+    const fetchedList = fetchFunboxJsonAll_(urls);
+    const nextPending = [];
+    fetchedList.forEach((fetched, index) => {
       statusCode = fetched.statusCode;
       bytes += fetched.bytes;
       const items = Array.isArray(fetched.json) ? fetched.json : [];
@@ -1076,9 +1004,13 @@ function fetchFunboxCategoryListings_(rule) {
         seen[product.productId] = true;
         products.push(product);
       });
-      if (items.length < FUNBOX_CATEGORY_LIMIT) break;
-    }
-  });
+      const job = pending[index];
+      if (items.length >= FUNBOX_CATEGORY_LIMIT && job.page < FUNBOX_CATEGORY_MAX_PAGES) {
+        nextPending.push({ path: job.path, page: job.page + 1 });
+      }
+    });
+    pending = nextPending;
+  }
   return {
     url: category.url,
     path: category.name,
@@ -1135,15 +1067,31 @@ function funboxItemToProduct_(item, fallbackHandle) {
     || String((item && item.handle) || fallbackHandle || '').replace(/\.json$/i, '');
   if (!handle) return null;
   const price = item.price || (item.variants && item.variants[0] && item.variants[0].price);
+  const quantity = funboxQuantity_(item);
   return {
     platform: 'Funbox',
     productId: handle,
     url: canonicalFunboxProductUrl_(handle),
     name: cleanText_(item.title || ''),
     price: price !== undefined && price !== null && price !== '' ? `NT$${price}` : '',
+    quantity,
     stockState: funboxStockState_(item),
-    signals: ['Funbox shop listing'],
+    signals: ['Funbox shop listing', quantity === '' ? '' : `qty:${quantity}`].filter(Boolean),
   };
+}
+
+function funboxQuantity_(item) {
+  const variants = (item && item.variants) || [];
+  let total = 0;
+  let tracked = false;
+  variants.forEach((variant) => {
+    const qty = Number(variant.inventory_quantity);
+    if (!isNaN(qty)) {
+      tracked = true;
+      total += qty;
+    }
+  });
+  return tracked ? total : '';
 }
 
 function funboxStockState_(item) {
@@ -1167,28 +1115,20 @@ function formatFunboxSummary_(product, filter) {
   const filterText = filter.matched
     ? 'filters matched'
     : `filters missed (${filter.reasons.join('; ')})`;
-  return `Funbox product ${product.productId}: ${product.stockState}; ${product.name || 'name not parsed'}; ${product.price || 'price not parsed'}; ${filterText}.`;
+  const qtyText = hasQuantity_(product) ? `qty ${product.quantity}` : 'qty not parsed';
+  return `Funbox product ${product.productId}: ${product.stockState}; ${qtyText}; ${product.name || 'name not parsed'}; ${product.price || 'price not parsed'}; ${filterText}.`;
 }
 
 function formatFunboxTelegram_(product, kind, categoryPath) {
-  const title = kind === 'new'
-    ? 'Funbox 直營上架：符合條件且目前有庫存'
-    : 'Funbox 直營補貨通知：符合條件且目前有庫存';
-  return [
-    title,
-    categoryPath || '',
-    product.name || `商品 ${product.productId}`,
-    product.price ? `價格：${product.price}` : '',
-    product.url,
-  ].filter(Boolean).join('\n');
+  return formatUserStockTelegram_('Funbox', kind, product.name || `商品 ${product.productId}`, product, product.url);
 }
 
 function formatFunboxCategorySummary_(listing, matched) {
   const path = listing.path || 'Funbox category';
   if (listing.empty) {
-    return `${path}: 0 official goods listed (${listing.emptyReason || 'empty'}). New in-stock listings will notify after the baseline.`;
+    return `${path}: 0 official goods listed (${listing.emptyReason || 'empty'}).`;
   }
-  return `${path}: ${listing.products.length} official goods, ${matched.length} matched filters.`;
+  return `${path}: ${listing.products.length} official goods, ${matched.length} matched filters. ${formatQuantityPreview_(listing.products)}`;
 }
 
 function evaluateAmazonRule_(rule) {
@@ -1419,27 +1359,18 @@ function formatAmazonSummary_(product, filter) {
 }
 
 function formatAmazonTelegram_(product, kind, searchPath) {
-  const title = kind === 'new'
-    ? 'Amazon.co.jp 上架：符合條件且目前有庫存'
-    : 'Amazon.co.jp 補貨通知：符合條件且目前有庫存';
   const name = product.name && !amazonLooksLikeUrl_(product.name)
     ? product.name
     : `ASIN ${product.productId}`;
-  return [
-    title,
-    searchPath || '',
-    name,
-    product.price ? `價格：${product.price}` : '',
-    canonicalAmazonProductUrl_(product.productId),
-  ].filter(Boolean).join('\n');
+  return formatUserStockTelegram_('Amazon', kind, name, product, canonicalAmazonProductUrl_(product.productId));
 }
 
 function formatAmazonSearchSummary_(listing, matched) {
   const path = listing.path || 'Amazon.co.jp search';
   if (listing.empty) {
-    return `${path}: 0 results parsed (${listing.emptyReason || 'empty'}). New in-stock listings will notify after the baseline.`;
+    return `${path}: 0 results parsed (${listing.emptyReason || 'empty'}).`;
   }
-  return `${path}: ${listing.products.length} results, ${matched.length} matched filters.`;
+  return `${path}: ${listing.products.length} results, ${matched.length} matched filters. ${formatQuantityPreview_(listing.products)}`;
 }
 
 function getSelectedRule_() {
@@ -1480,11 +1411,135 @@ function updateRuleCheck_(row, status) {
     .getRange(row, 8, 1, 2).setValues([[new Date(), status]]);
 }
 
-function appendProductSnapshot_(product) {
-  SpreadsheetApp.getActive().getSheetByName(SHEETS.PRODUCTS).appendRow([
-    new Date(), new Date(), product.platform || 'Momo', product.name, product.url, product.price,
-    product.stockState, `${product.productId}:${product.stockState}:${product.price}`,
+function telegramSkipNote_(product, filter) {
+  if (product.stockState !== 'IN_STOCK') {
+    return `${product.productId} ${product.stockState || 'UNKNOWN'}`;
+  }
+  return `${product.productId} filters missed (${filter.reasons.join('; ')})`;
+}
+
+function formatUserStockTelegram_(shop, kind, name, product, url) {
+  const title = kind === 'new' ? `${shop} 上架` : kind === 'restock' ? `${shop} 補貨` : `${shop} 有貨`;
+  const details = [
+    product.price || '',
+    hasQuantity_(product) ? `庫存 ${product.quantity}` : '',
+  ].filter(Boolean).join(' · ');
+  return [title, name, details, url].filter(Boolean).join('\n');
+}
+
+function hasQuantity_(product) {
+  return product && product.quantity !== undefined && product.quantity !== null && product.quantity !== '';
+}
+
+function stockPart_(raw) {
+  return String(raw || '').split('|')[0];
+}
+
+function packedState_(product) {
+  return hasQuantity_(product) ? `${product.stockState}|${product.quantity}` : product.stockState;
+}
+
+function formatQuantityPreview_(products) {
+  const list = products || [];
+  const inStock = list.filter((product) => product.stockState === 'IN_STOCK').length;
+  const preview = list.slice(0, 6).map((product) => {
+    const qty = hasQuantity_(product) ? ` qty=${product.quantity}` : '';
+    return `${product.productId}:${product.stockState}${qty}`;
+  }).join('; ');
+  const extra = list.length > 6 ? `; +${list.length - 6} more` : '';
+  return `in stock ${inStock}. ${preview}${extra}`;
+}
+
+function formatInStockFilterNote_(summary, previousRaw, product, filter) {
+  if (product.stockState === 'IN_STOCK' && !filter.matched) {
+    return `${summary} In stock seen but filters did not match, so no Telegram was sent.`;
+  }
+  if (product.stockState !== 'IN_STOCK') {
+    return `${summary} No Telegram (${product.stockState || 'UNKNOWN'}).`;
+  }
+  return summary;
+}
+
+function recordAndNotifyInStock_(props, stateKey, product, filter, telegramFactory) {
+  const previousRaw = props.getProperty(stateKey);
+  upsertProductSnapshot_(product);
+  let notified = 0;
+  if (filter.matched && product.stockState === 'IN_STOCK') {
+    const previousStock = stockPart_(previousRaw);
+    const kind = previousStock !== 'IN_STOCK' ? (previousStock ? 'restock' : 'new') : 'in_stock';
+    const result = sendTelegram_(telegramFactory(kind));
+    if (!result.ok) throw new Error(`Telegram: ${result.message}`);
+    notified = 1;
+  }
+  if (product.stockState !== 'UNKNOWN' && packedState_(product) !== previousRaw) {
+    props.setProperty(stateKey, packedState_(product));
+  }
+  return notified;
+}
+
+function ensureProductsSheet_(ss) {
+  const sheet = (ss || SpreadsheetApp.getActive()).getSheetByName(SHEETS.PRODUCTS);
+  if (!sheet) return sheet;
+  const lastCol = Math.max(sheet.getLastColumn(), PRODUCT_HEADERS.length);
+  const header = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  if (header[6] === 'Stock state' && header[7] === 'Hash') {
+    sheet.insertColumnAfter(7);
+  }
+  sheet.getRange(1, 1, 1, PRODUCT_HEADERS.length).setValues([PRODUCT_HEADERS]).setFontWeight('bold');
+  return sheet;
+}
+
+let productRowIndexCache_ = null;
+
+function resetProductRowIndex_() {
+  productRowIndexCache_ = null;
+}
+
+function loadProductRowIndex_(sheet) {
+  if (productRowIndexCache_) return productRowIndexCache_;
+  productRowIndexCache_ = {};
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return productRowIndexCache_;
+  const rows = sheet.getRange(2, 1, lastRow - 1, PRODUCT_HEADERS.length).getValues();
+  for (let i = 0; i < rows.length; i++) {
+    const platform = String(rows[i][2] || '').toLowerCase();
+    const url = String(rows[i][4] || '');
+    const hash = String(rows[i][8] || rows[i][7] || '');
+    const productId = hash.split(':')[0];
+    const rowNumber = i + 2;
+    if (productId) productRowIndexCache_[`${platform}|id|${productId}`] = rowNumber;
+    if (url) productRowIndexCache_[`${platform}|url|${url}`] = rowNumber;
+  }
+  return productRowIndexCache_;
+}
+
+function upsertProductSnapshot_(product) {
+  const sheet = ensureProductsSheet_();
+  const qty = hasQuantity_(product) ? product.quantity : '';
+  const now = new Date();
+  const platform = product.platform || 'Momo';
+  const hash = `${product.productId}:${product.stockState}:${product.price}:${qty}`;
+  const index = loadProductRowIndex_(sheet);
+  const keyId = `${String(platform).toLowerCase()}|id|${product.productId}`;
+  const keyUrl = `${String(platform).toLowerCase()}|url|${product.url}`;
+  const row = index[keyId] || index[keyUrl] || 0;
+  if (row) {
+    const firstSeen = sheet.getRange(row, 1).getValue() || now;
+    sheet.getRange(row, 1, 1, PRODUCT_HEADERS.length).setValues([[
+      firstSeen, now, platform, product.name, product.url, product.price,
+      product.stockState, qty, hash,
+    ]]);
+    index[keyId] = row;
+    index[keyUrl] = row;
+    return;
+  }
+  sheet.appendRow([
+    now, now, platform, product.name, product.url, product.price,
+    product.stockState, qty, hash,
   ]);
+  const newRow = sheet.getLastRow();
+  index[keyId] = newRow;
+  index[keyUrl] = newRow;
 }
 
 function readMetaContent_(html, name) {
