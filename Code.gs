@@ -178,19 +178,20 @@ function pollTelegramCommands_() {
 
 function ensureTelegramBotCommands_(token) {
   const props = PropertiesService.getScriptProperties();
-  if (props.getProperty('TELEGRAM_COMMANDS_SET') === '3') return;
+  if (props.getProperty('TELEGRAM_COMMANDS_SET') === '4') return;
   UrlFetchApp.fetch(`https://api.telegram.org/bot${token}/setMyCommands`, {
     method: 'post',
     contentType: 'application/json',
     payload: JSON.stringify({
       commands: [
-        { command: 'status', description: '查看 momo / Funbox / Amazon / MM 運作狀況' },
+        { command: 'status', description: '查看試算表 GAS 運作狀況' },
+        { command: 'status_local', description: '查看本地 watcher 運作狀況' },
         { command: 'help', description: '可用指令' },
       ],
     }),
     muteHttpExceptions: true,
   });
-  props.setProperty('TELEGRAM_COMMANDS_SET', '3');
+  props.setProperty('TELEGRAM_COMMANDS_SET', '4');
 }
 
 function telegramCommand_(text) {

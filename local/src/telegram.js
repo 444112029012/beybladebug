@@ -33,7 +33,8 @@ export function telegramCommand(text) {
 export function helpText(intervalSeconds) {
   return [
     'Beyblade local watcher 指令',
-    '/status_local 或 STATUS_LOCAL — 查看本機各規則最近一次檢查',
+    '/status — 試算表 GAS 運作狀況（若 GAS 有在跑）',
+    '/status_local 或 STATUS_LOCAL — 本機 watcher 最近一次檢查',
     '/help — 顯示這段說明',
     `本地程式正在跑，約每 ${intervalSeconds} 秒檢查一次。回覆通常在數秒內。`,
     '試算表 GAS 仍用 /status。',
@@ -67,18 +68,19 @@ export function buildStatusText(config, state) {
 }
 
 export async function ensureBotCommands(config, state) {
-  if (!config.telegramToken || state.meta.commandsSet === 'status_local') return;
+  if (!config.telegramToken || state.meta.commandsSet === 'status_and_local') return;
   await fetch(`https://api.telegram.org/bot${config.telegramToken}/setMyCommands`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       commands: [
+        { command: 'status', description: '查看試算表 GAS 運作狀況' },
         { command: 'status_local', description: '查看本地 watcher 運作狀況' },
         { command: 'help', description: '可用指令' },
       ],
     }),
   }).catch(() => {});
-  state.meta.commandsSet = 'status_local';
+  state.meta.commandsSet = 'status_and_local';
 }
 
 export async function pollTelegramCommands(config, state) {

@@ -19,13 +19,13 @@ node src/index.js --interval 30
 
 `--interval` is seconds and overrides `.env` `POLL_INTERVAL_SECONDS` and `watch.rules.json`.
 
-While it is running, Telegram `/status_local` or `STATUS_LOCAL` returns last-checked time and a one-line summary per rule. `/help` lists commands. Replies are usually within a couple of seconds. The Sheet watcher still uses `/status`. If both use the same bot, they still share `getUpdates`; prefer one process polling Telegram, or you may miss a command.
+While it is running, Telegram `/status_local` or `STATUS_LOCAL` returns last-checked time for the local watcher. `/status` is for the Sheet GAS watcher. `/help` lists commands. The bot menu should show both `status` and `status_local`. Replies are usually within a couple of seconds. Both programs share `getUpdates` on the same bot; if a command seems ignored, only one of them may have consumed it.
 
 ## Notify policy
 
 By default Telegram (and the highlighted stock line) only fires on **new** or **restock**. Set `"notifyEveryInStock": true` in `watch.rules.json` to match the Sheet behaviour (alert every cycle while still in stock). Every check still prints a one-line summary in the terminal.
 
-State is stored in `data/state.json` (gitignored).
+State is stored in `data/state.json` (gitignored). Closing the terminal with Ctrl+C saves state and exits. Shutting the PC down without Ctrl+C just kills the process; it does **not** keep running. Start `node src/index.js` again after boot. Sudden power-off during a write falls back to `state.json.bak`.
 
 ## MM 小舖
 

@@ -111,6 +111,7 @@ async function runOnce(config, state) {
 async function main() {
   const config = loadConfig();
   const state = loadState(config.root);
+  installProcessGuards(state);
   log(`local watcher interval=${config.intervalSeconds}s rules=${config.rules.filter((rule) => rule.enabled).length} telegram=${config.telegramToken && config.telegramChatId ? 'on' : 'off'}`);
   await runOnce(config, state);
   if (config.once) return;
@@ -130,6 +131,30 @@ async function main() {
       .then(() => saveState(state))
       .catch((error) => log(`telegram poll failed: ${error.message}`));
   }, 2000);
+}
+
+function installProcessGuards(state) {
+  let stopping = false;
+  const stop = (reason, code = 0) => {
+    if (stopping) return;
+    stopping = true;
+    log(`stopping (${reason})`);
+    try { saveState(state); } catch (error) {
+      console.error(error);
+    }
+    process.exit(code);
+  };
+  ['SIGINT', 'SIGTERM', 'SIGBREAK'].forEach((signal) => {
+    process.on(signal, () => stop(signal, 0));
+  });
+  process.on('unhandledRejection', (error) => {
+    log(`unhandledRejection: ${error && error.message ? error.message : error}`);
+    try { saveState(state); } catch (saveError) { /* ignore */ }
+  });
+  process.on('uncaughtException', (error) => {
+    log(`uncaughtException: ${error && error.message ? error.message : error}`);
+    stop('uncaughtException', 1);
+  });
 }
 
 main().catch((error) => {

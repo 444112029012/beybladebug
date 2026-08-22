@@ -1,5 +1,5 @@
 {
-  "intervalSeconds": 10,
+  "intervalSeconds": 5,
   "notifyEveryInStock": true,
   "rules": [
     {
@@ -13,9 +13,9 @@
     {
       "enabled": true,
       "platform": "Funbox",
-      "url": "https://shop.funbox.com.tw/categories/XB/RU",
-      "include": "",
-      "exclude": "",
+      "url": "https://shop.funbox.com.tw/categories/XI/KB",
+      "include": "BEYBLADE,戰鬥陀螺,爆旋陀螺,BX-,UX-,CX-",
+      "exclude": "used,中古",
       "maxPrice": ""
     },
     {
