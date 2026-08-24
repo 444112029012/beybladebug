@@ -10,3 +10,4 @@ local/data/
 tmp-*.json
 .DS_Store
 Thumbs.db
+funbox-checkout-helper/
