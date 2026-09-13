@@ -32,6 +32,24 @@ const MOMO_FUNBOX_BEYBLADE = {
   cateLevel: '3',
   path: 'funbox toys > 兒童玩具 > 戰鬥陀螺',
 };
+const MOMO_TOY_MALL_BEYBLADE = {
+  url: 'https://www.momoshop.com.tw/categories/2701200114',
+  cateCode: '2701200114',
+  cateLevel: '3',
+  path: '玩具 > 人氣IP > 戰鬥陀螺',
+};
+const MOMO_TOY_MALL_BEYBLADE_LIMITED = {
+  url: 'https://www.momoshop.com.tw/categories/2701202072',
+  cateCode: '2701202072',
+  cateLevel: '3',
+  path: '玩具 > 戰鬥陀螺★限量發售',
+};
+const MOMO_BEYBLADE_LISTINGS = [
+  MOMO_FUNBOX_BEYBLADE,
+  MOMO_TOY_MALL_BEYBLADE,
+  MOMO_TOY_MALL_BEYBLADE_LIMITED,
+];
+const MOMO_BEYBLADE_COMBINED_PATH = 'momo 戰鬥陀螺（品牌旗艦 + 人氣IP + 限量發售）';
 
 const FUNBOX_SHOP_ORIGIN = 'https://shop.funbox.com.tw';
 const FUNBOX_CATEGORIES_JSON = FUNBOX_SHOP_ORIGIN + '/categories.json';
@@ -106,7 +124,7 @@ function setupSpreadsheet() {
     rules.appendRow([
       true, 'Momo', MOMO_FUNBOX_BEYBLADE.url,
       'BEYBLADE,戰鬥陀螺,爆旋陀螺', 'used,中古,收納,戰鬥盤,陀螺盤', '', 'New or in stock', '', 'Pending probe',
-      'Official funbox toys > 兒童玩具 > 戰鬥陀螺. Discovers new listings without knowing product IDs.',
+      'Official momo 戰鬥陀螺 listings: brand-flagship 2186500036 plus toy-mall 人氣IP 2701200114 and 限量發售 2701202072. Discovers new IDs without knowing them in advance.',
     ]);
     rules.appendRow([
       true, 'Momo',
@@ -818,21 +836,80 @@ function parseMomoCategory_(url) {
     else if (/m_code=|MgrpCategory/i.test(text)) cateLevel = '2';
     else cateLevel = '3';
   }
-  const path = cateCode === MOMO_FUNBOX_BEYBLADE.cateCode
-    ? MOMO_FUNBOX_BEYBLADE.path
-    : `momo category ${cateCode}`;
-  return { cateCode, cateLevel, path, url: `https://www.momoshop.com.tw/categories/${cateCode}` };
+  const known = momoKnownListing_(cateCode);
+  const path = known ? known.path : `momo category ${cateCode}`;
+  return { cateCode, cateLevel: known ? known.cateLevel : cateLevel, path, url: `https://www.momoshop.com.tw/categories/${cateCode}` };
+}
+
+function momoKnownListing_(cateCode) {
+  for (let i = 0; i < MOMO_BEYBLADE_LISTINGS.length; i++) {
+    if (MOMO_BEYBLADE_LISTINGS[i].cateCode === String(cateCode)) return MOMO_BEYBLADE_LISTINGS[i];
+  }
+  return null;
+}
+
+function momoListingCategories_(category) {
+  if (!momoKnownListing_(category.cateCode)) return [category];
+  return MOMO_BEYBLADE_LISTINGS.map((item) => ({
+    cateCode: item.cateCode,
+    cateLevel: item.cateLevel,
+    path: item.path,
+    url: item.url,
+  }));
 }
 
 function fetchMomoCategoryListings_(rule) {
   const category = parseMomoCategory_(rule.url);
   if (!category) throw new Error('This is not a momo category URL.');
+  const categories = momoListingCategories_(category);
   const products = [];
   const seen = {};
   let emptyReason = '';
   let statusCode = 200;
   let bytes = 0;
-  let maxPage = 1;
+  categories.forEach((cat) => {
+    const part = fetchMomoOneCategory_(cat);
+    statusCode = part.statusCode;
+    bytes += part.bytes;
+    if (part.empty && part.emptyReason) emptyReason = part.emptyReason;
+    part.products.forEach((product) => {
+      const previous = seen[product.productId];
+      if (!previous) {
+        seen[product.productId] = product;
+        products.push(product);
+        return;
+      }
+      if (previous.stockState !== 'IN_STOCK' && product.stockState === 'IN_STOCK') {
+        Object.keys(product).forEach((key) => {
+          previous[key] = product[key];
+        });
+      }
+    });
+  });
+  return {
+    url: category.url,
+    cateCode: category.cateCode,
+    path: categories.length > 1 ? MOMO_BEYBLADE_COMBINED_PATH : category.path,
+    statusCode,
+    contentType: 'application/json',
+    bytes,
+    products,
+    empty: products.length === 0,
+    emptyReason: products.length === 0 ? (emptyReason || 'no listed goods in these momo 戰鬥陀螺 categories') : '',
+    signals: [
+      products.length ? `${products.length} official goods` : 'Empty official category',
+      categories.length > 1 ? `categories:${categories.length}` : '',
+      emptyReason,
+    ].filter(Boolean),
+  };
+}
+
+function fetchMomoOneCategory_(category) {
+  const products = [];
+  const seen = {};
+  let emptyReason = '';
+  let statusCode = 200;
+  let bytes = 0;
   for (let page = 1; page <= MOMO_CATEGORY_MAX_PAGES; page++) {
     const payload = momoCategoryPayload_(category.cateCode, category.cateLevel, page);
     const response = UrlFetchApp.fetch(MOMO_CATEGORY_API, {
@@ -854,14 +931,14 @@ function fetchMomoCategoryListings_(rule) {
     }
     const json = JSON.parse(body);
     if (json.success === false && String(json.resultCode) === '40006') {
-      emptyReason = 'no listed goods in this official category';
+      emptyReason = `no listed goods in ${category.path}`;
       break;
     }
     if (json.success === false) {
       throw new Error(`momo category API result ${json.resultCode || 'unknown'}.`);
     }
     const goods = ((json.rtnGoodsData && json.rtnGoodsData.goodsInfoList) || []);
-    maxPage = Number(json.maxPage) || 1;
+    const maxPage = Number(json.maxPage) || 1;
     goods.forEach((item) => {
       const product = momoCategoryItemToProduct_(item, category);
       if (!product || seen[product.productId]) return;
@@ -871,19 +948,11 @@ function fetchMomoCategoryListings_(rule) {
     if (page >= maxPage) break;
   }
   return {
-    url: category.url,
-    cateCode: category.cateCode,
-    path: category.path,
     statusCode,
-    contentType: 'application/json',
     bytes,
     products,
     empty: products.length === 0,
     emptyReason,
-    signals: [
-      products.length ? `${products.length} official goods` : 'Empty official category',
-      emptyReason,
-    ].filter(Boolean),
   };
 }
 
@@ -937,17 +1006,19 @@ function momoCategoryPayload_(cateCode, cateLevel, page) {
 function momoCategoryItemToProduct_(item, category) {
   const productId = String((item && item.goodsCode) || '').trim();
   if (!/^\d+$/.test(productId)) return null;
-  const stockValue = parsePriceNumber_(item.goodsStock);
+  const hasStock = !(item.goodsStock === undefined || item.goodsStock === null || item.goodsStock === '');
+  const stockValue = hasStock ? parsePriceNumber_(item.goodsStock) : '';
+  const stockState = hasStock && stockValue <= 0 ? 'OUT_OF_STOCK' : 'IN_STOCK';
   return {
     platform: 'Momo',
     productId,
     url: canonicalMomoProductUrl_(productId),
     name: cleanText_(item.goodsName),
     price: item.goodsPrice ? `NT$${item.goodsPrice}` : '',
-    quantity: item.goodsStock === undefined || item.goodsStock === null || item.goodsStock === '' ? '' : stockValue,
-    stockState: 'IN_STOCK',
+    quantity: hasStock ? stockValue : '',
+    stockState,
     categoryPath: category.path,
-    signals: ['Official category listing', stockValue || stockValue === 0 ? `qty:${item.goodsStock}` : 'listed'],
+    signals: ['Official category listing', hasStock ? `qty:${item.goodsStock}` : 'listed'],
   };
 }
 

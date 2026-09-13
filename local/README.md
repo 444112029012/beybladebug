@@ -27,6 +27,10 @@ By default Telegram (and the highlighted stock line) only fires on **new** or **
 
 State is stored in `data/state.json` (gitignored). Closing the terminal with Ctrl+C saves state and exits. Shutting the PC down without Ctrl+C just kills the process; it does **not** keep running. Start `node src/index.js` again after boot. Sudden power-off during a write falls back to `state.json.bak`.
 
+## momo
+
+The default momo category URL is still `https://www.momoshop.com.tw/categories/2186500036`. That rule also scans toy-mall **人氣IP > 戰鬥陀螺** (`2701200114`) and **戰鬥陀螺★限量發售** (`2701202072`). Brand-flagship 戰鬥陀螺 is often empty while those toy-mall folders have the SKUs. `has3P` stays off, so `TP` marketplace IDs are ignored. Listed items with quantity 0 are out of stock.
+
 ## MM 小舖
 
 Only `#不補` specs are counted. `客訂` is ignored. In stock means 不補 quantity **> 0** and the button is not **補貨中**.

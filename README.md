@@ -42,28 +42,32 @@ A `⚠ 可能已停止` line means that rule has not been updated for about thre
 
 The bot only answers the chat ID stored in `TELEGRAM_CHAT_ID`.
 
-## momo: official funbox toys only
+## momo: official 戰鬥陀螺 listings (not site search)
 
-The monitor is limited to momo's brand-flagship path:
+momo puts Beyblade in more than one official category. The brand-flagship path is often empty while the same SKUs are listed under the toy mall:
 
-**funbox toys > 兒童玩具 > 戰鬥陀螺**
+| Path | Category code |
+| --- | --- |
+| funbox toys > 兒童玩具 > 戰鬥陀螺 | `2186500036` |
+| 玩具 > 人氣IP > 戰鬥陀螺 | `2701200114` |
+| 玩具 > 戰鬥陀螺★限量發售 | `2701202072` |
 
-`https://www.momoshop.com.tw/categories/2186500036`
+The default Watch Rules row still uses `https://www.momoshop.com.tw/categories/2186500036`. That one row now scans **all three** official categories and merges them. Site search is still not used: it mixes in third-party `TP` marketplace items.
 
-This is the official TAKARA TOMY / funbox listing, not the site-wide search. Site search mixes in third-party `TP` marketplace items and is not used.
+Example: `https://momo.dm/yuayuU` (CX-18+UX-02, product `15670779`) lives under **玩具 > 人氣IP > 戰鬥陀螺**, not the brand-flagship 戰鬥陀螺 folder. Watching only `2186500036` therefore missed it.
 
-On 2026-08-19 that official category showed `很抱歉，沒有篩選到符合條件的商品`. A full scan of the parent **兒童玩具** listing (`2186500015`, 668 official goods) also had no Beyblade titles in stock. The two known SKUs still have product pages, but they are out of stock, so momo hides them from the category:
+A listed item with `goodsStock` 0 is treated as out of stock (no Telegram). When funbox lists a matching in-stock item in any of those categories, Telegram is sent.
+
+On 2026-08-19 the brand-flagship category showed `很抱歉，沒有篩選到符合條件的商品`. The two older SKUs still have product pages and remain on **Watch Rules** as product URLs so a restock can be detected after the category hides them:
 
 - `https://www.momoshop.com.tw/product/15462752` — BEYBLADE X BX-00 暴風天馬3-70RA
 - `https://www.momoshop.com.tw/product/15462751` — BEYBLADE X UX-20 榮耀武神LF
-
-Those two remain on **Watch Rules** as product URLs so a restock can still be detected from the product page. The category row is what finds **new official IDs** you cannot know in advance: when funbox lists a matching in-stock item, Telegram is sent.
 
 Keyword filters on the category row (`BEYBLADE,戰鬥陀螺,爆旋陀螺`) ignore unrelated toys if this category is reused. Exclude keywords drop storage cases and stadiums if they appear.
 
 Then:
 
-1. Select the category row and run **Probe selected momo or Funbox rule**. Expect `0 official goods listed` while the category is empty.
+1. Select the category row and run **Probe selected momo or Funbox rule**. Expect goods from the toy-mall 戰鬥陀螺 listing even when the brand-flagship folder is empty.
 2. Run **Check all momo and Funbox rules now** once. An empty category stores an empty baseline; the next new in-stock listing can notify. Product-URL rows still use a quiet first check.
 3. Run **Install repeating 5-minute check**. If daily quota is exhausted, stay on 5 minutes rather than 1.
 
