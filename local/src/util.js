@@ -51,11 +51,25 @@ export function hasQuantity(product) {
   return product && product.quantity !== undefined && product.quantity !== null && product.quantity !== '';
 }
 
+export function applyQuantityStockGuard(product) {
+  if (!product) return product;
+  if (hasQuantity(product) && Number(product.quantity) <= 0 && product.stockState === 'IN_STOCK') {
+    product.stockState = 'OUT_OF_STOCK';
+  }
+  return product;
+}
+
+export function isPurchasable(product) {
+  applyQuantityStockGuard(product);
+  return !!(product && product.stockState === 'IN_STOCK');
+}
+
 export function stockPart(raw) {
   return String(raw || '').split('|')[0];
 }
 
 export function packedState(product) {
+  applyQuantityStockGuard(product);
   return hasQuantity(product) ? `${product.stockState}|${product.quantity}` : product.stockState;
 }
 

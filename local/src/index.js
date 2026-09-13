@@ -1,5 +1,5 @@
 import { loadConfig } from './config.js';
-import { applyFilters, formatStockMessage, packedState, stockPart } from './util.js';
+import { applyFilters, applyQuantityStockGuard, formatStockMessage, isPurchasable, packedState, stockPart } from './util.js';
 import { loadState, saveState, stateKey } from './state.js';
 import { log, notify } from './notify.js';
 import { pollTelegramCommands } from './telegram.js';
@@ -30,11 +30,12 @@ async function runRule(rule) {
 }
 
 async function handleProduct(config, state, rule, product) {
+  applyQuantityStockGuard(product);
   const filter = applyFilters(product, rule);
   const key = stateKey(product);
   const previousRaw = state.values[key];
   let notified = 0;
-  if (filter.matched && product.stockState === 'IN_STOCK') {
+  if (filter.matched && isPurchasable(product)) {
     const previousStock = stockPart(previousRaw);
     const kind = previousStock !== 'IN_STOCK' ? (previousStock ? 'restock' : 'new') : 'in_stock';
     const shouldNotify = config.notifyEveryInStock || kind !== 'in_stock';
@@ -60,7 +61,7 @@ async function checkRule(config, state, rule) {
     for (const product of products) {
       notified += await handleProduct(config, state, rule, product);
     }
-    const inStock = products.filter((product) => product.stockState === 'IN_STOCK').length;
+    const inStock = products.filter((product) => isPurchasable(product)).length;
     const matched = products.filter((product) => applyFilters(product, rule).matched).length;
     const summary = `${result.path || rule.url}: ${products.length} items, ${inStock} in stock, ${matched} matched, notified=${notified}`;
     log(`${rule.platform} ${summary}`);

@@ -124,19 +124,33 @@ function payload(cateCode, cateLevel, page) {
   };
 }
 
+export function momoQuantityFromGoodsStock(goodsStock) {
+  if (goodsStock === undefined || goodsStock === null || goodsStock === '') return '';
+  return parsePriceNumber(goodsStock);
+}
+
+export function momoStockStateFromGoodsStock(goodsStock) {
+  const qty = momoQuantityFromGoodsStock(goodsStock);
+  if (qty === '') return 'IN_STOCK';
+  return Number(qty) > 0 ? 'IN_STOCK' : 'OUT_OF_STOCK';
+}
+
+export function parseMomoGoodsStock(body) {
+  return firstMatch(body, /goodsStock\\?"\s*:\s*\\?"(\d+)/);
+}
+
 function itemToProduct(item, category) {
   const productId = String((item && item.goodsCode) || '').trim();
   if (!/^\d+$/.test(productId)) return null;
-  const hasStock = !(item.goodsStock === undefined || item.goodsStock === null || item.goodsStock === '');
-  const stockValue = hasStock ? parsePriceNumber(item.goodsStock) : '';
+  const quantity = momoQuantityFromGoodsStock(item && item.goodsStock);
   return {
     platform: 'Momo',
     productId,
     url: canonicalMomoProductUrl(productId),
     name: cleanText(item.goodsName),
     price: item.goodsPrice ? `NT$${item.goodsPrice}` : '',
-    quantity: hasStock ? stockValue : '',
-    stockState: hasStock && stockValue <= 0 ? 'OUT_OF_STOCK' : 'IN_STOCK',
+    quantity,
+    stockState: momoStockStateFromGoodsStock(item && item.goodsStock),
     categoryPath: category.path,
   };
 }
@@ -240,10 +254,13 @@ export async function fetchMomoProduct(url) {
   const name = cleanText(String(rawName || '').replace(/\s*-\s*momo[\s\S]*$/i, ''));
   const priceAmount = readMeta(body, 'product:price:amount');
   const availability = readMeta(body, 'product:availability').toLowerCase();
+  const stockRaw = parseMomoGoodsStock(body);
+  const quantity = stockRaw === '' ? '' : Number(stockRaw);
   const unlisted = /商品目前無展售|網頁無法顯示/i.test(text) || (!availability && !name);
   let stockState = 'UNKNOWN';
   if (unlisted) stockState = 'UNLISTED';
   else if (availability === 'out of stock' || /可訂購時通知我|補貨通知/i.test(text)) stockState = 'OUT_OF_STOCK';
+  else if (quantity !== '' && quantity <= 0) stockState = 'OUT_OF_STOCK';
   else if (availability === 'in stock' || /加入購物車|立即購買|我要購買/i.test(text)) stockState = 'IN_STOCK';
   return {
     platform: 'Momo',
@@ -251,6 +268,7 @@ export async function fetchMomoProduct(url) {
     url: canonicalUrl,
     name,
     price: priceAmount ? `NT$${priceAmount}` : '',
+    quantity,
     stockState,
   };
 }

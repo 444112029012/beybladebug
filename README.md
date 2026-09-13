@@ -56,7 +56,7 @@ The default Watch Rules row still uses `https://www.momoshop.com.tw/categories/2
 
 Example: `https://momo.dm/yuayuU` (CX-18+UX-02, product `15670779`) lives under **玩具 > 人氣IP > 戰鬥陀螺**, not the brand-flagship 戰鬥陀螺 folder. Watching only `2186500036` therefore missed it.
 
-A listed item with `goodsStock` 0 is treated as out of stock (no Telegram). When funbox lists a matching in-stock item in any of those categories, Telegram is sent.
+A listed item with `goodsStock` 0 is treated as out of stock (no Telegram). Telegram is also skipped if quantity is present and `<= 0`, even if a listing was still labelled in stock. When any of those categories lists a matching item with quantity greater than 0, Telegram is sent.
 
 On 2026-08-19 the brand-flagship category showed `很抱歉，沒有篩選到符合條件的商品`. The two older SKUs still have product pages and remain on **Watch Rules** as product URLs so a restock can be detected after the category hides them:
 
