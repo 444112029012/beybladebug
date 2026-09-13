@@ -4,6 +4,31 @@ import { cleanText, firstMatch, htmlToText, parsePriceNumber } from '../util.js'
 const CATEGORY_API = 'https://www.momoshop.com.tw/api/moecapp/getCategoryGoodsV3';
 const MAX_PAGES = 5;
 
+const FUNBOX_BEYBLADE = {
+  cateCode: '2186500036',
+  cateLevel: '3',
+  path: 'funbox toys > 兒童玩具 > 戰鬥陀螺',
+  url: 'https://www.momoshop.com.tw/categories/2186500036',
+};
+const TOY_MALL_BEYBLADE = {
+  cateCode: '2701200114',
+  cateLevel: '3',
+  path: '玩具 > 人氣IP > 戰鬥陀螺',
+  url: 'https://www.momoshop.com.tw/categories/2701200114',
+};
+const TOY_MALL_BEYBLADE_LIMITED = {
+  cateCode: '2701202072',
+  cateLevel: '3',
+  path: '玩具 > 戰鬥陀螺★限量發售',
+  url: 'https://www.momoshop.com.tw/categories/2701202072',
+};
+const BEYBLADE_LISTINGS = [FUNBOX_BEYBLADE, TOY_MALL_BEYBLADE, TOY_MALL_BEYBLADE_LIMITED];
+const BEYBLADE_COMBINED_PATH = 'momo 戰鬥陀螺（品牌旗艦 + 人氣IP + 限量發售）';
+
+function knownListing(cateCode) {
+  return BEYBLADE_LISTINGS.find((item) => item.cateCode === String(cateCode)) || null;
+}
+
 export function parseMomoCategory(url) {
   const text = String(url || '');
   if (!/momoshop\.com\.tw/i.test(text)) return null;
@@ -12,12 +37,24 @@ export function parseMomoCategory(url) {
     || firstMatch(text, /[?&]m_code=(\d+)/i)
     || firstMatch(text, /[?&]l_code=(\d+)/i);
   if (!cateCode) return null;
+  const known = knownListing(cateCode);
+  let cateLevel = firstMatch(text, /[?&]cateLevel=(\d+)/i);
+  if (!cateLevel) {
+    if (/l_code=|LgrpCategory/i.test(text) || /0000$/.test(cateCode)) cateLevel = '1';
+    else if (/m_code=|MgrpCategory/i.test(text)) cateLevel = '2';
+    else cateLevel = '3';
+  }
   return {
     cateCode,
-    cateLevel: '3',
-    path: cateCode === '2186500036' ? 'funbox toys > 兒童玩具 > 戰鬥陀螺' : `momo category ${cateCode}`,
+    cateLevel: known ? known.cateLevel : cateLevel,
+    path: known ? known.path : `momo category ${cateCode}`,
     url: `https://www.momoshop.com.tw/categories/${cateCode}`,
   };
+}
+
+function listingCategories(category) {
+  if (!knownListing(category.cateCode)) return [category];
+  return BEYBLADE_LISTINGS.map((item) => ({ ...item }));
 }
 
 export function parseMomoProductId(url) {
@@ -90,15 +127,17 @@ function payload(cateCode, cateLevel, page) {
 function itemToProduct(item, category) {
   const productId = String((item && item.goodsCode) || '').trim();
   if (!/^\d+$/.test(productId)) return null;
-  const stockValue = parsePriceNumber(item.goodsStock);
+  const hasStock = !(item.goodsStock === undefined || item.goodsStock === null || item.goodsStock === '');
+  const stockValue = hasStock ? parsePriceNumber(item.goodsStock) : '';
   return {
     platform: 'Momo',
     productId,
     url: canonicalMomoProductUrl(productId),
     name: cleanText(item.goodsName),
     price: item.goodsPrice ? `NT$${item.goodsPrice}` : '',
-    quantity: item.goodsStock === undefined || item.goodsStock === null || item.goodsStock === '' ? '' : stockValue,
-    stockState: 'IN_STOCK',
+    quantity: hasStock ? stockValue : '',
+    stockState: hasStock && stockValue <= 0 ? 'OUT_OF_STOCK' : 'IN_STOCK',
+    categoryPath: category.path,
   };
 }
 
@@ -114,12 +153,10 @@ async function fetchCategoryPage(category, page) {
   return fetched.json;
 }
 
-export async function fetchMomoCategory(rule) {
-  const category = parseMomoCategory(rule.url);
-  if (!category) throw new Error('Not a momo category URL');
+async function fetchOneCategory(category) {
   const first = await fetchCategoryPage(category, 1);
   if (first.success === false && String(first.resultCode) === '40006') {
-    return { path: category.path, products: [], empty: true, emptyReason: 'no listed goods in this official category' };
+    return { path: category.path, products: [], empty: true, emptyReason: `no listed goods in ${category.path}` };
   }
   if (first.success === false) throw new Error(`momo category API result ${first.resultCode || 'unknown'}`);
   const maxPage = Math.min(Number(first.maxPage) || 1, MAX_PAGES);
@@ -141,6 +178,40 @@ export async function fetchMomoCategory(rule) {
     });
   });
   return { path: category.path, products, empty: products.length === 0, emptyReason: '' };
+}
+
+function mergeProducts(parts) {
+  const products = [];
+  const seen = {};
+  parts.forEach((part) => {
+    part.products.forEach((product) => {
+      const previous = seen[product.productId];
+      if (!previous) {
+        seen[product.productId] = product;
+        products.push(product);
+        return;
+      }
+      if (previous.stockState !== 'IN_STOCK' && product.stockState === 'IN_STOCK') {
+        Object.assign(previous, product);
+      }
+    });
+  });
+  return products;
+}
+
+export async function fetchMomoCategory(rule) {
+  const category = parseMomoCategory(rule.url);
+  if (!category) throw new Error('Not a momo category URL');
+  const categories = listingCategories(category);
+  const parts = await Promise.all(categories.map((item) => fetchOneCategory(item)));
+  const products = mergeProducts(parts);
+  const emptyReason = parts.map((part) => part.emptyReason).find(Boolean) || '';
+  return {
+    path: categories.length > 1 ? BEYBLADE_COMBINED_PATH : category.path,
+    products,
+    empty: products.length === 0,
+    emptyReason: products.length === 0 ? (emptyReason || 'no listed goods in these momo 戰鬥陀螺 categories') : '',
+  };
 }
 
 function readMeta(html, name) {
