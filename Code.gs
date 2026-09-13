@@ -543,7 +543,7 @@ function checkFunboxCategoryRule_(rule, props) {
     const filter = applyMomoFilters_(product, rule);
     const stateKey = `FUNBOX_PRODUCT_STATE_${product.productId}`;
     notified += recordAndNotifyInStock_(props, stateKey, product, filter, (kind) => formatFunboxTelegram_(product, kind, listing.path));
-    if (!(filter.matched && product.stockState === 'IN_STOCK') && skipNotes.length < 4) {
+    if (!(filter.matched && isPurchasable_(product)) && skipNotes.length < 4) {
       skipNotes.push(telegramSkipNote_(product, filter));
     }
   });
@@ -593,7 +593,7 @@ function checkMmListingRule_(rule, props) {
     const filter = applyMomoFilters_(product, rule);
     const stateKey = `MM_PRODUCT_STATE_${product.productId}`;
     notified += recordAndNotifyInStock_(props, stateKey, product, filter, (kind) => formatMmTelegram_(product, kind, listing.path));
-    if (!(filter.matched && product.stockState === 'IN_STOCK') && skipNotes.length < 4) {
+    if (!(filter.matched && isPurchasable_(product)) && skipNotes.length < 4) {
       skipNotes.push(telegramSkipNote_(product, filter));
     }
   });
@@ -761,11 +761,15 @@ function fetchMomoProduct_(url) {
   const name = cleanProductName_(rawName);
   const priceAmount = readMetaContent_(body, 'product:price:amount');
   const availability = readMetaContent_(body, 'product:availability').toLowerCase();
+  const stockRaw = parseMomoGoodsStock_(body);
+  const quantity = stockRaw === '' ? '' : Number(stockRaw);
   const unlisted = /\u5546\u54c1\u76ee\u524d\u7121\u5c55\u552e|\u7db2\u9801\u7121\u6cd5\u986f\u793a/i.test(text)
     || (!availability && !name);
   let stockState = 'UNKNOWN';
   if (unlisted) stockState = 'UNLISTED';
   else if (availability === 'out of stock' || /\u53ef\u8a02\u8cfc\u6642\u901a\u77e5\u6211|\u88dc\u8ca8\u901a\u77e5/i.test(text)) {
+    stockState = 'OUT_OF_STOCK';
+  } else if (quantity !== '' && quantity <= 0) {
     stockState = 'OUT_OF_STOCK';
   } else if (availability === 'in stock' || /\u52a0\u5165\u8cfc\u7269\u8eca|\u7acb\u5373\u8cfc\u8cb7|\u6211\u8981\u8cfc\u8cb7/i.test(text)) {
     stockState = 'IN_STOCK';
@@ -780,9 +784,10 @@ function fetchMomoProduct_(url) {
     bytes: body.length,
     name,
     price: priceAmount ? `NT$${priceAmount}` : '',
+    quantity,
     stockState,
     availability: availability || '',
-    signals: [stockState, availability ? `availability:${availability}` : '', name ? 'Product name' : '', priceAmount ? 'Price' : ''].filter(Boolean),
+    signals: [stockState, availability ? `availability:${availability}` : '', quantity !== '' ? `qty:${quantity}` : '', name ? 'Product name' : '', priceAmount ? 'Price' : ''].filter(Boolean),
   };
 }
 
@@ -1003,22 +1008,36 @@ function momoCategoryPayload_(cateCode, cateLevel, page) {
   };
 }
 
+function momoQuantityFromGoodsStock_(goodsStock) {
+  if (goodsStock === undefined || goodsStock === null || goodsStock === '') return '';
+  return parsePriceNumber_(goodsStock);
+}
+
+function momoStockStateFromGoodsStock_(goodsStock) {
+  const qty = momoQuantityFromGoodsStock_(goodsStock);
+  if (qty === '') return 'IN_STOCK';
+  return Number(qty) > 0 ? 'IN_STOCK' : 'OUT_OF_STOCK';
+}
+
+function parseMomoGoodsStock_(body) {
+  return firstMatch_(body, /goodsStock\\?"\s*:\s*\\?"(\d+)/);
+}
+
 function momoCategoryItemToProduct_(item, category) {
   const productId = String((item && item.goodsCode) || '').trim();
   if (!/^\d+$/.test(productId)) return null;
-  const hasStock = !(item.goodsStock === undefined || item.goodsStock === null || item.goodsStock === '');
-  const stockValue = hasStock ? parsePriceNumber_(item.goodsStock) : '';
-  const stockState = hasStock && stockValue <= 0 ? 'OUT_OF_STOCK' : 'IN_STOCK';
+  const quantity = momoQuantityFromGoodsStock_(item && item.goodsStock);
+  const stockState = momoStockStateFromGoodsStock_(item && item.goodsStock);
   return {
     platform: 'Momo',
     productId,
     url: canonicalMomoProductUrl_(productId),
     name: cleanText_(item.goodsName),
     price: item.goodsPrice ? `NT$${item.goodsPrice}` : '',
-    quantity: hasStock ? stockValue : '',
+    quantity,
     stockState,
     categoryPath: category.path,
-    signals: ['Official category listing', hasStock ? `qty:${item.goodsStock}` : 'listed'],
+    signals: ['Official category listing', quantity === '' ? 'listed' : `qty:${item.goodsStock}`],
   };
 }
 
@@ -1824,7 +1843,7 @@ function updateRuleCheck_(row, status) {
 }
 
 function telegramSkipNote_(product, filter) {
-  if (product.stockState !== 'IN_STOCK') {
+  if (!isPurchasable_(product)) {
     return `${product.productId} ${product.stockState || 'UNKNOWN'}`;
   }
   return `${product.productId} filters missed (${filter.reasons.join('; ')})`;
@@ -1843,17 +1862,31 @@ function hasQuantity_(product) {
   return product && product.quantity !== undefined && product.quantity !== null && product.quantity !== '';
 }
 
+function applyQuantityStockGuard_(product) {
+  if (!product) return product;
+  if (hasQuantity_(product) && Number(product.quantity) <= 0 && product.stockState === 'IN_STOCK') {
+    product.stockState = 'OUT_OF_STOCK';
+  }
+  return product;
+}
+
+function isPurchasable_(product) {
+  applyQuantityStockGuard_(product);
+  return !!(product && product.stockState === 'IN_STOCK');
+}
+
 function stockPart_(raw) {
   return String(raw || '').split('|')[0];
 }
 
 function packedState_(product) {
+  applyQuantityStockGuard_(product);
   return hasQuantity_(product) ? `${product.stockState}|${product.quantity}` : product.stockState;
 }
 
 function formatQuantityPreview_(products) {
   const list = products || [];
-  const inStock = list.filter((product) => product.stockState === 'IN_STOCK').length;
+  const inStock = list.filter((product) => isPurchasable_(product)).length;
   const preview = list.slice(0, 6).map((product) => {
     const qty = hasQuantity_(product) ? ` qty=${product.quantity}` : '';
     return `${product.productId}:${product.stockState}${qty}`;
@@ -1863,20 +1896,21 @@ function formatQuantityPreview_(products) {
 }
 
 function formatInStockFilterNote_(summary, previousRaw, product, filter) {
-  if (product.stockState === 'IN_STOCK' && !filter.matched) {
+  if (isPurchasable_(product) && !filter.matched) {
     return `${summary} In stock seen but filters did not match, so no Telegram was sent.`;
   }
-  if (product.stockState !== 'IN_STOCK') {
+  if (!isPurchasable_(product)) {
     return `${summary} No Telegram (${product.stockState || 'UNKNOWN'}).`;
   }
   return summary;
 }
 
 function recordAndNotifyInStock_(props, stateKey, product, filter, telegramFactory) {
+  applyQuantityStockGuard_(product);
   const previousRaw = props.getProperty(stateKey);
   upsertProductSnapshot_(product);
   let notified = 0;
-  if (filter.matched && product.stockState === 'IN_STOCK') {
+  if (filter.matched && isPurchasable_(product)) {
     const previousStock = stockPart_(previousRaw);
     const kind = previousStock !== 'IN_STOCK' ? (previousStock ? 'restock' : 'new') : 'in_stock';
     const result = sendTelegram_(telegramFactory(kind));
