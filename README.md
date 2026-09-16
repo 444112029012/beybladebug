@@ -52,9 +52,18 @@ momo puts Beyblade in more than one official category. The brand-flagship path i
 | 玩具 > 人氣IP > 戰鬥陀螺 | `2701200114` |
 | 玩具 > 戰鬥陀螺★限量發售 | `2701202072` |
 
-The default Watch Rules row still uses `https://www.momoshop.com.tw/categories/2186500036`. That one row now scans **all three** official categories and merges them. Site search is still not used: it mixes in third-party `TP` marketplace items.
+The default Watch Rules row still uses `https://www.momoshop.com.tw/categories/2186500036`. That one row now scans **all three** folders and merges them, then keeps only **Funbox 品牌旗艦店** goods. Toy-mall 戰鬥陀螺 folders mix in other shops (麗嬰代理、廠商宅配 resellers) that are not original Funbox price. Site search is still not used: it mixes in third-party `TP` marketplace items.
 
-Example: `https://momo.dm/yuayuU` (CX-18+UX-02, product `15670779`) lives under **玩具 > 人氣IP > 戰鬥陀螺**, not the brand-flagship 戰鬥陀螺 folder. Watching only `2186500036` therefore missed it.
+momo product **詳細資訊** does not name the shop as a simple 廠商 field. `品牌名稱` is `TAKARA TOMY` on Funbox and resellers alike. The official shop is identified from the product page payload:
+
+| Signal | Funbox original-price | Other shops |
+| --- | --- | --- |
+| `enterpriseNo` / `entpCode` | `006093` | other IDs (`020641`, `004120`, …) |
+| 品牌旗艦店 | `funbox toys` | absent (`配送方式: 廠商宅配`) |
+
+Category listings do not include that shop id, so the watcher opens each keyword-matched product page and drops anything that is not Funbox.
+
+Example: `https://momo.dm/yuayuU` (CX-18+UX-02, product `15670779`) is Funbox `006093` and currently lives under **玩具 > 戰鬥陀螺★限量發售**. Reseller UX-20 listings in 人氣IP are ignored.
 
 A listed item with `goodsStock` 0 is treated as out of stock (no Telegram). Telegram is also skipped if quantity is present and `<= 0`, even if a listing was still labelled in stock. When any of those categories lists a matching item with quantity greater than 0, Telegram is sent.
 

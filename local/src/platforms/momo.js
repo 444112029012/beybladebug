@@ -1,5 +1,5 @@
 import { fetchJson, fetchText } from '../http.js';
-import { cleanText, firstMatch, htmlToText, parsePriceNumber } from '../util.js';
+import { cleanText, firstMatch, htmlToText, matchesAnyKeyword, parsePriceNumber } from '../util.js';
 
 const CATEGORY_API = 'https://www.momoshop.com.tw/api/moecapp/getCategoryGoodsV3';
 const MAX_PAGES = 5;
@@ -24,6 +24,8 @@ const TOY_MALL_BEYBLADE_LIMITED = {
 };
 const BEYBLADE_LISTINGS = [FUNBOX_BEYBLADE, TOY_MALL_BEYBLADE, TOY_MALL_BEYBLADE_LIMITED];
 const BEYBLADE_COMBINED_PATH = 'momo 戰鬥陀螺（品牌旗艦 + 人氣IP + 限量發售）';
+const FUNBOX_ENTERPRISE_NO = '006093';
+const MAX_FUNBOX_PAGES = 40;
 
 function knownListing(cateCode) {
   return BEYBLADE_LISTINGS.find((item) => item.cateCode === String(cateCode)) || null;
@@ -139,6 +141,17 @@ export function parseMomoGoodsStock(body) {
   return firstMatch(body, /goodsStock\\?"\s*:\s*\\?"(\d+)/);
 }
 
+export function parseMomoEnterpriseNo(body) {
+  return firstMatch(body, /enterpriseNo\\?"\s*:\s*\\?"(\d+)/)
+    || firstMatch(body, /entpCode\\?"\s*:\s*\\?"(\d+)/);
+}
+
+export function isMomoFunboxOfficial(body) {
+  const html = String(body || '');
+  if (parseMomoEnterpriseNo(html) === FUNBOX_ENTERPRISE_NO) return true;
+  return /itemTitle\\?"\s*:\s*\\?"funbox toys/i.test(html) && /品牌旗艦店/.test(html);
+}
+
 function itemToProduct(item, category) {
   const productId = String((item && item.goodsCode) || '').trim();
   if (!/^\d+$/.test(productId)) return null;
@@ -213,18 +226,47 @@ function mergeProducts(parts) {
   return products;
 }
 
+function keywordMatched(product, rule) {
+  return matchesAnyKeyword(product.name, rule && rule.include, false)
+    && !matchesAnyKeyword(product.name, rule && rule.exclude, true);
+}
+
+async function keepFunboxOfficial(products, rule) {
+  const candidates = products.filter((product) => keywordMatched(product, rule)).slice(0, MAX_FUNBOX_PAGES);
+  const pages = await Promise.all(candidates.map(async (product) => {
+    try {
+      const page = await fetchMomoProduct(product.url);
+      return { product, page };
+    } catch (error) {
+      return { product, page: null };
+    }
+  }));
+  const kept = [];
+  pages.forEach(({ product, page }) => {
+    if (!page || !page.isFunboxOfficial) return;
+    kept.push({
+      ...product,
+      enterpriseNo: page.enterpriseNo,
+      isFunboxOfficial: true,
+    });
+  });
+  return kept;
+}
+
 export async function fetchMomoCategory(rule) {
   const category = parseMomoCategory(rule.url);
   if (!category) throw new Error('Not a momo category URL');
   const categories = listingCategories(category);
   const parts = await Promise.all(categories.map((item) => fetchOneCategory(item)));
-  const products = mergeProducts(parts);
+  const listed = mergeProducts(parts);
+  const products = await keepFunboxOfficial(listed, rule);
   const emptyReason = parts.map((part) => part.emptyReason).find(Boolean) || '';
   return {
     path: categories.length > 1 ? BEYBLADE_COMBINED_PATH : category.path,
     products,
+    listed: listed.length,
     empty: products.length === 0,
-    emptyReason: products.length === 0 ? (emptyReason || 'no listed goods in these momo 戰鬥陀螺 categories') : '',
+    emptyReason: products.length === 0 ? (emptyReason || 'no Funbox 品牌旗艦 goods in these momo 戰鬥陀螺 categories') : '',
   };
 }
 
@@ -256,6 +298,8 @@ export async function fetchMomoProduct(url) {
   const availability = readMeta(body, 'product:availability').toLowerCase();
   const stockRaw = parseMomoGoodsStock(body);
   const quantity = stockRaw === '' ? '' : Number(stockRaw);
+  const enterpriseNo = parseMomoEnterpriseNo(body);
+  const isFunboxOfficial = isMomoFunboxOfficial(body);
   const unlisted = /商品目前無展售|網頁無法顯示/i.test(text) || (!availability && !name);
   let stockState = 'UNKNOWN';
   if (unlisted) stockState = 'UNLISTED';
@@ -270,6 +314,8 @@ export async function fetchMomoProduct(url) {
     price: priceAmount ? `NT$${priceAmount}` : '',
     quantity,
     stockState,
+    enterpriseNo,
+    isFunboxOfficial,
   };
 }
 
