@@ -1,14 +1,15 @@
-import { fetchAllJson, fetchJson } from '../http.js';
-import { cleanText, firstMatch, toQueryString } from '../util.js';
+import { fetchJson } from '../http.js';
+import { cleanText, firstMatch } from '../util.js';
 
 const ORIGIN = 'https://shop.funbox.com.tw';
-const LIMIT = 48;
-const MAX_PAGES = 3;
-const DEFAULT_COLLECTIONS = ['XIKBXA', 'XIKBXB', 'XIKBXC', 'XIKBXD', 'XIKBXP', 'XIKBBB', 'XIKBAA', 'XIKBCC', 'XIKBCD', 'KB2X'];
 
 const JSON_HEADERS = {
   Referer: `${ORIGIN}/`,
 };
+
+export function funboxCategoryJsonUrl(path) {
+  return `${ORIGIN}/categories/${String(path || '').replace(/^\/+|\/+$/g, '')}.json`;
+}
 
 export function parseFunboxCategory(url) {
   const text = String(url || '');
@@ -36,12 +37,15 @@ function canonicalProductUrl(handle) {
   return `${ORIGIN}/products/${handle}`;
 }
 
-function productsUrl(path, page) {
-  return `${ORIGIN}/category_products/${path}.json?${toQueryString({
-    limit: LIMIT,
-    page,
-    sort_by: 'sell_from-desc',
-  })}`;
+function handleFromItem(item, fallbackHandle) {
+  const fromUrl = parseFunboxProductHandle(item && item.url);
+  if (fromUrl) return fromUrl;
+  if (item && item.handle) return String(item.handle).replace(/\.json$/i, '');
+  if (item && item.full_handle) {
+    const parts = String(item.full_handle).split('/').filter(Boolean);
+    return (parts[parts.length - 1] || '').replace(/\.json$/i, '');
+  }
+  return String(fallbackHandle || '').replace(/\.json$/i, '');
 }
 
 function quantity(item) {
@@ -76,8 +80,7 @@ function stockState(item) {
 }
 
 function itemToProduct(item, fallbackHandle) {
-  const handle = parseFunboxProductHandle(item && item.url)
-    || String((item && item.handle) || fallbackHandle || '').replace(/\.json$/i, '');
+  const handle = handleFromItem(item, fallbackHandle);
   if (!handle) return null;
   const price = item.price || (item.variants && item.variants[0] && item.variants[0].price);
   const qty = quantity(item);
@@ -92,58 +95,25 @@ function itemToProduct(item, fallbackHandle) {
   };
 }
 
-async function listingPaths(category) {
-  const paths = [category.path];
-  if (!category.expandCollections) return paths;
-  let collections = DEFAULT_COLLECTIONS;
-  try {
-    const fetched = await fetchJson(`${ORIGIN}/categories.json`, { headers: JSON_HEADERS });
-    const parts = category.path.split('/').filter(Boolean);
-    let nodes = Array.isArray(fetched.json) ? fetched.json : [];
-    let node = null;
-    parts.forEach((handle) => {
-      const list = node ? (node.children_categories || []) : nodes;
-      node = list.find((item) => String(item.handle) === handle) || null;
-    });
-    if (node && node.collections && node.collections.length) {
-      collections = node.collections.map((item) => String(item.handle || '')).filter(Boolean);
-    }
-  } catch (error) {
-    // Keep the known XI/KB collection list.
-  }
-  collections.forEach((handle) => {
-    const child = `${category.path}/${handle}`;
-    if (!paths.includes(child)) paths.push(child);
-  });
-  return paths;
+function listingItems(json) {
+  if (Array.isArray(json)) return json;
+  if (json && Array.isArray(json.products)) return json.products;
+  if (json && Array.isArray(json.items)) return json.items;
+  return [];
 }
 
 export async function fetchFunboxCategory(rule) {
   const category = parseFunboxCategory(rule.url);
   if (!category) throw new Error('Not a Funbox category URL');
-  const paths = await listingPaths(category);
+  const fetched = await fetchJson(funboxCategoryJsonUrl(category.path), { headers: JSON_HEADERS });
   const products = [];
   const seen = {};
-  let pending = paths.map((path) => ({ path, page: 1 }));
-  while (pending.length) {
-    const urls = pending.map((job) => productsUrl(job.path, job.page));
-    const fetchedList = await fetchAllJson(urls, { headers: JSON_HEADERS });
-    const nextPending = [];
-    fetchedList.forEach((fetched, index) => {
-      const items = Array.isArray(fetched.json) ? fetched.json : [];
-      items.forEach((item) => {
-        const product = itemToProduct(item, '');
-        if (!product || seen[product.productId]) return;
-        seen[product.productId] = true;
-        products.push(product);
-      });
-      const job = pending[index];
-      if (items.length >= LIMIT && job.page < MAX_PAGES) {
-        nextPending.push({ path: job.path, page: job.page + 1 });
-      }
-    });
-    pending = nextPending;
-  }
+  listingItems(fetched.json).forEach((item) => {
+    const product = itemToProduct(item, '');
+    if (!product || seen[product.productId]) return;
+    seen[product.productId] = true;
+    products.push(product);
+  });
   return { path: category.name, products, empty: products.length === 0 };
 }
 
@@ -151,7 +121,8 @@ export async function fetchFunboxProduct(url) {
   const handle = parseFunboxProductHandle(url);
   if (!handle) throw new Error('Not a Funbox product URL');
   const fetched = await fetchJson(`${canonicalProductUrl(handle)}.json`, { headers: JSON_HEADERS });
-  const product = itemToProduct(fetched.json || {}, handle);
+  const json = fetched.json || {};
+  const product = itemToProduct(json.product || json, handle);
   if (!product) throw new Error(`Funbox JSON missing ${handle}`);
   return product;
 }

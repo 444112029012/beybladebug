@@ -68,9 +68,43 @@ export function stockPart(raw) {
   return String(raw || '').split('|')[0];
 }
 
+export function quantityPart(raw) {
+  const parts = String(raw || '').split('|');
+  if (parts.length < 2 || parts[1] === '') return '';
+  const qty = Number(parts[1]);
+  return Number.isFinite(qty) ? qty : '';
+}
+
 export function packedState(product) {
   applyQuantityStockGuard(product);
   return hasQuantity(product) ? `${product.stockState}|${product.quantity}` : product.stockState;
+}
+
+export const NOTIFY_QTY_DROP = 30;
+
+export function quantityDrop(previousQuantity, currentQuantity) {
+  const prev = Number(previousQuantity);
+  const cur = Number(currentQuantity);
+  if (!Number.isFinite(prev) || !Number.isFinite(cur)) return 0;
+  return prev - cur;
+}
+
+export function isFunboxAppTicket(product) {
+  if (!product || product.platform !== 'Funbox') return false;
+  return /APP兌換|交換票券|購買票券/.test(String(product.name || ''));
+}
+
+export function shouldNotifyStock(product, kind, options = {}) {
+  if (kind !== 'in_stock') return true;
+  if (quantityDrop(options.previousQuantity, options.currentQuantity) >= NOTIFY_QTY_DROP) return true;
+  return options.notifyEveryInStock === true;
+}
+
+export function notifyKindForStock(kind, options = {}) {
+  if (kind === 'in_stock' && quantityDrop(options.previousQuantity, options.currentQuantity) >= NOTIFY_QTY_DROP) {
+    return 'qty_drop';
+  }
+  return kind;
 }
 
 export function applyFilters(product, rule) {
@@ -92,11 +126,18 @@ export function applyFilters(product, rule) {
   return { matched: reasons.length === 0, reasons };
 }
 
-export function formatStockMessage(shop, kind, name, product, url) {
-  const title = kind === 'new' ? `${shop} 上架` : kind === 'restock' ? `${shop} 補貨` : `${shop} 有貨`;
+export function formatStockMessage(shop, kind, name, product, url, extra = {}) {
+  const title = kind === 'new' ? `${shop} 上架`
+    : kind === 'restock' ? `${shop} 補貨`
+      : kind === 'qty_drop' ? `${shop} 庫存下降`
+        : `${shop} 有貨`;
+  const drop = quantityDrop(extra.previousQuantity, product && product.quantity);
+  const qtyText = kind === 'qty_drop' && hasQuantity(product) && drop > 0
+    ? `庫存 ${extra.previousQuantity} → ${product.quantity}（-${drop}）`
+    : hasQuantity(product) ? `庫存 ${product.quantity}` : '';
   const details = [
     product.price || '',
-    hasQuantity(product) ? `庫存 ${product.quantity}` : '',
+    qtyText,
   ].filter(Boolean).join(' · ');
   return [title, name, details, url].filter(Boolean).join('\n');
 }

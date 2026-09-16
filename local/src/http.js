@@ -46,6 +46,9 @@ export async function fetchJson(url, options = {}) {
   if (fetched.status < 200 || fetched.status >= 300) {
     throw new Error(`HTTP ${fetched.status} for ${url}`);
   }
+  if (!/json/i.test(fetched.contentType) && /^\s*</.test(fetched.text)) {
+    throw new Error(`Not JSON (got HTML) for ${url}`);
+  }
   try {
     return { ...fetched, json: JSON.parse(fetched.text) };
   } catch (error) {

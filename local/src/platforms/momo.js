@@ -322,7 +322,7 @@ export async function fetchMomoProduct(url) {
 export async function runMomoRule(rule) {
   if (parseMomoCategory(rule.url)) {
     const listing = await fetchMomoCategory(rule);
-    return { kind: 'listing', path: listing.path, products: listing.products, empty: listing.empty };
+    return { kind: 'listing', path: listing.path, products: listing.products, empty: listing.empty, listed: listing.listed };
   }
   if (parseMomoProductId(rule.url)) {
     return { kind: 'product', products: [await fetchMomoProduct(rule.url)] };

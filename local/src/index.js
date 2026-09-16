@@ -1,5 +1,5 @@
 import { loadConfig } from './config.js';
-import { applyFilters, applyQuantityStockGuard, formatStockMessage, isPurchasable, packedState, stockPart } from './util.js';
+import { applyFilters, applyQuantityStockGuard, formatStockMessage, hasQuantity, isPurchasable, notifyKindForStock, packedState, quantityPart, shouldNotifyStock, stockPart } from './util.js';
 import { loadState, saveState, stateKey } from './state.js';
 import { log, notify } from './notify.js';
 import { pollTelegramCommands } from './telegram.js';
@@ -38,8 +38,21 @@ async function handleProduct(config, state, rule, product) {
   if (filter.matched && isPurchasable(product)) {
     const previousStock = stockPart(previousRaw);
     const kind = previousStock !== 'IN_STOCK' ? (previousStock ? 'restock' : 'new') : 'in_stock';
-    const shouldNotify = config.notifyEveryInStock || kind !== 'in_stock';
-    const text = formatStockMessage(shopName(product), kind, productLabel(product), product, product.url);
+    const notifyOpts = {
+      notifyEveryInStock: config.notifyEveryInStock,
+      previousQuantity: quantityPart(previousRaw),
+      currentQuantity: hasQuantity(product) ? product.quantity : '',
+    };
+    const shouldNotify = shouldNotifyStock(product, kind, notifyOpts);
+    const notifyKind = notifyKindForStock(kind, notifyOpts);
+    const text = formatStockMessage(
+      shopName(product),
+      notifyKind,
+      productLabel(product),
+      product,
+      product.url,
+      { previousQuantity: notifyOpts.previousQuantity },
+    );
     if (shouldNotify) {
       await notify(config, text);
       notified = 1;
@@ -63,7 +76,9 @@ async function checkRule(config, state, rule) {
     }
     const inStock = products.filter((product) => isPurchasable(product)).length;
     const matched = products.filter((product) => applyFilters(product, rule).matched).length;
-    const summary = `${result.path || rule.url}: ${products.length} items, ${inStock} in stock, ${matched} matched, notified=${notified}`;
+    const listed = Number.isFinite(Number(result.listed)) ? `${result.listed} listed, ` : '';
+    const official = result.listed != null ? ' Funbox 品牌旗艦' : ' items';
+    const summary = `${result.path || rule.url}: ${listed}${products.length}${official}, ${inStock} in stock, ${matched} matched, notified=${notified}`;
     log(`${rule.platform} ${summary}`);
     recordRuleStatus(state, rule, summary);
     return { notified, products: products.length };

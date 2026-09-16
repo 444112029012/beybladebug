@@ -1,6 +1,6 @@
 {
   "intervalSeconds": 5,
-  "notifyEveryInStock": true,
+  "notifyEveryInStock": false,
   "rules": [
     {
       "enabled": true,

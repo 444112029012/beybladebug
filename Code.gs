@@ -54,9 +54,6 @@ const MOMO_FUNBOX_ENTERPRISE_NO = '006093';
 const MOMO_FUNBOX_PAGE_MAX = 40;
 
 const FUNBOX_SHOP_ORIGIN = 'https://shop.funbox.com.tw';
-const FUNBOX_CATEGORIES_JSON = FUNBOX_SHOP_ORIGIN + '/categories.json';
-const FUNBOX_CATEGORY_LIMIT = 48;
-const FUNBOX_CATEGORY_MAX_PAGES = 3;
 const FUNBOX_JSON_HEADERS = {
   Accept: 'application/json, text/plain, */*',
   'X-Requested-With': 'XMLHttpRequest',
@@ -1164,6 +1161,10 @@ function parseFunboxJsonResponse_(response, url) {
   if (statusCode < 200 || statusCode >= 300) {
     throw new Error(`Funbox returned HTTP ${statusCode} for ${url}`);
   }
+  const contentType = response.getHeaders()['Content-Type'] || '';
+  if (!/json/i.test(contentType) && /^\s*</.test(body)) {
+    throw new Error(`Funbox did not return JSON (got HTML) for ${url}`);
+  }
   let json;
   try {
     json = JSON.parse(body);
@@ -1178,18 +1179,8 @@ function parseFunboxJsonResponse_(response, url) {
   };
 }
 
-function fetchFunboxJsonAll_(urls) {
-  if (!urls.length) return [];
-  const responses = UrlFetchApp.fetchAll(urls.map((url) => funboxJsonRequest_(url)));
-  return responses.map((response, index) => parseFunboxJsonResponse_(response, urls[index]));
-}
-
-function funboxCategoryProductsUrl_(path, page) {
-  return `${FUNBOX_SHOP_ORIGIN}/category_products/${path}.json?${toQueryString_({
-    limit: FUNBOX_CATEGORY_LIMIT,
-    page,
-    sort_by: 'sell_from-desc',
-  })}`;
+function funboxCategoryJsonUrl_(path) {
+  return `${FUNBOX_SHOP_ORIGIN}/categories/${path}.json`;
 }
 
 function fetchFunboxProduct_(url) {
@@ -1198,7 +1189,8 @@ function fetchFunboxProduct_(url) {
     throw new Error('Paste a Funbox product URL, for example https://shop.funbox.com.tw/products/handle');
   }
   const fetched = fetchFunboxJson_(`${canonicalFunboxProductUrl_(handle)}.json`);
-  const product = funboxItemToProduct_(fetched.json || {}, handle);
+  const json = fetched.json || {};
+  const product = funboxItemToProduct_(json.product || json, handle);
   product.statusCode = fetched.statusCode;
   product.contentType = fetched.contentType;
   product.bytes = fetched.bytes;
@@ -1206,36 +1198,27 @@ function fetchFunboxProduct_(url) {
   return product;
 }
 
+function funboxListingItems_(json) {
+  if (Array.isArray(json)) return json;
+  if (json && json.products && json.products.length) return json.products;
+  if (json && json.items && json.items.length) return json.items;
+  return [];
+}
+
 function fetchFunboxCategoryListings_(rule) {
   const category = parseFunboxCategory_(rule.url);
   if (!category) throw new Error('This is not a Funbox category URL.');
-  const paths = funboxListingPaths_(category);
+  const fetched = fetchFunboxJson_(funboxCategoryJsonUrl_(category.path));
   const products = [];
   const seen = {};
-  let statusCode = 200;
-  let bytes = 0;
-  let pending = paths.map((path) => ({ path, page: 1 }));
-  while (pending.length) {
-    const urls = pending.map((job) => funboxCategoryProductsUrl_(job.path, job.page));
-    const fetchedList = fetchFunboxJsonAll_(urls);
-    const nextPending = [];
-    fetchedList.forEach((fetched, index) => {
-      statusCode = fetched.statusCode;
-      bytes += fetched.bytes;
-      const items = Array.isArray(fetched.json) ? fetched.json : [];
-      items.forEach((item) => {
-        const product = funboxItemToProduct_(item, '');
-        if (!product || seen[product.productId]) return;
-        seen[product.productId] = true;
-        products.push(product);
-      });
-      const job = pending[index];
-      if (items.length >= FUNBOX_CATEGORY_LIMIT && job.page < FUNBOX_CATEGORY_MAX_PAGES) {
-        nextPending.push({ path: job.path, page: job.page + 1 });
-      }
-    });
-    pending = nextPending;
-  }
+  funboxListingItems_(fetched.json).forEach((item) => {
+    const product = funboxItemToProduct_(item, '');
+    if (!product || seen[product.productId]) return;
+    seen[product.productId] = true;
+    products.push(product);
+  });
+  const statusCode = fetched.statusCode;
+  const bytes = fetched.bytes;
   return {
     url: category.url,
     path: category.name,
@@ -1248,48 +1231,24 @@ function fetchFunboxCategoryListings_(rule) {
     emptyReason: products.length === 0 ? 'no listed goods in this official Funbox category' : '',
     signals: [
       products.length ? `${products.length} official goods` : 'Empty official category',
-      `paths:${paths.length}`,
+      'listing:/categories/' + category.path + '.json',
     ],
   };
 }
 
-function funboxListingPaths_(category) {
-  const paths = [category.path];
-  if (!category.expandCollections) return paths;
-  const collections = funboxDiscoverCollections_(category.path) || FUNBOX_BEYBLADE.collections;
-  collections.forEach((handle) => {
-    const child = `${category.path}/${handle}`;
-    if (paths.indexOf(child) === -1) paths.push(child);
-  });
-  return paths;
-}
-
-function funboxDiscoverCollections_(categoryPath) {
-  try {
-    const fetched = fetchFunboxJson_(FUNBOX_CATEGORIES_JSON);
-    const parts = String(categoryPath || '').split('/').filter(Boolean);
-    let nodes = Array.isArray(fetched.json) ? fetched.json : [];
-    let node = null;
-    parts.forEach((handle) => {
-      const list = node ? (node.children_categories || []) : nodes;
-      node = null;
-      for (let i = 0; i < list.length; i++) {
-        if (String(list[i].handle) === handle) {
-          node = list[i];
-          break;
-        }
-      }
-    });
-    if (!node || !node.collections || !node.collections.length) return null;
-    return node.collections.map((item) => String(item.handle || '')).filter(Boolean);
-  } catch (error) {
-    return null;
+function funboxHandleFromItem_(item, fallbackHandle) {
+  const fromUrl = parseFunboxProductHandle_(item && item.url);
+  if (fromUrl) return fromUrl;
+  if (item && item.handle) return String(item.handle).replace(/\.json$/i, '');
+  if (item && item.full_handle) {
+    const parts = String(item.full_handle).split('/').filter(Boolean);
+    return (parts[parts.length - 1] || '').replace(/\.json$/i, '');
   }
+  return String(fallbackHandle || '').replace(/\.json$/i, '');
 }
 
 function funboxItemToProduct_(item, fallbackHandle) {
-  const handle = parseFunboxProductHandle_(item && item.url)
-    || String((item && item.handle) || fallbackHandle || '').replace(/\.json$/i, '');
+  const handle = funboxHandleFromItem_(item, fallbackHandle);
   if (!handle) return null;
   const price = item.price || (item.variants && item.variants[0] && item.variants[0].price);
   const quantity = funboxQuantity_(item);
@@ -1961,6 +1920,11 @@ function formatInStockFilterNote_(summary, previousRaw, product, filter) {
   return summary;
 }
 
+function isFunboxAppTicket_(product) {
+  if (!product || product.platform !== 'Funbox') return false;
+  return /APP兌換|交換票券|購買票券/.test(String(product.name || ''));
+}
+
 function recordAndNotifyInStock_(props, stateKey, product, filter, telegramFactory) {
   applyQuantityStockGuard_(product);
   const previousRaw = props.getProperty(stateKey);
@@ -1969,9 +1933,11 @@ function recordAndNotifyInStock_(props, stateKey, product, filter, telegramFacto
   if (filter.matched && isPurchasable_(product)) {
     const previousStock = stockPart_(previousRaw);
     const kind = previousStock !== 'IN_STOCK' ? (previousStock ? 'restock' : 'new') : 'in_stock';
-    const result = sendTelegram_(telegramFactory(kind));
-    if (!result.ok) throw new Error(`Telegram: ${result.message}`);
-    notified = 1;
+    if (!(kind === 'in_stock' && isFunboxAppTicket_(product))) {
+      const result = sendTelegram_(telegramFactory(kind));
+      if (!result.ok) throw new Error(`Telegram: ${result.message}`);
+      notified = 1;
+    }
   }
   if (product.stockState !== 'UNKNOWN' && packedState_(product) !== previousRaw) {
     props.setProperty(stateKey, packedState_(product));

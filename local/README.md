@@ -23,7 +23,7 @@ While it is running, Telegram `/status_local` or `STATUS_LOCAL` returns last-che
 
 ## Notify policy
 
-By default Telegram (and the highlighted stock line) only fires on **new** or **restock**. Set `"notifyEveryInStock": true` in `watch.rules.json` to match the Sheet behaviour (alert every cycle while still in stock). Every check still prints a one-line summary in the terminal.
+By default Telegram only fires on **new**, **restock**, or when quantity drops by **30** in one check. It does **not** alert every cycle while still in stock (so 2-second polls do not flood Telegram). Set `"notifyEveryInStock": true` in `watch.rules.json` only if you want the old every-cycle behaviour. Every check still prints a one-line summary in the terminal.
 
 State is stored in `data/state.json` (gitignored). Closing the terminal with Ctrl+C saves state and exits. Shutting the PC down without Ctrl+C just kills the process; it does **not** keep running. Start `node src/index.js` again after boot. Sudden power-off during a write falls back to `state.json.bak`.
 
