@@ -29,7 +29,7 @@ State is stored in `data/state.json` (gitignored). Closing the terminal with Ctr
 
 ## momo
 
-The default momo category URL is still `https://www.momoshop.com.tw/categories/2186500036`. That rule also scans toy-mall **人氣IP > 戰鬥陀螺** (`2701200114`) and **戰鬥陀螺★限量發售** (`2701202072`). Brand-flagship 戰鬥陀螺 is often empty while those toy-mall folders have the SKUs. `has3P` stays off, so `TP` marketplace IDs are ignored. Listed items with quantity 0 are out of stock, and Telegram is not sent when quantity is `<= 0`.
+The default momo category URL is still `https://www.momoshop.com.tw/categories/2186500036`. That rule also scans toy-mall **人氣IP > 戰鬥陀螺** (`2701200114`) and **戰鬥陀螺★限量發售** (`2701202072`), then keeps only Funbox 品牌旗艦店 goods (`enterpriseNo` `006093`). `品牌名稱` is TAKARA TOMY on resellers too, so it is not used. `has3P` stays off. Listed items with quantity 0 are out of stock, and Telegram is not sent when quantity is `<= 0`.
 
 ## MM 小舖
 

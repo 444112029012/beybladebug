@@ -4,7 +4,9 @@ import { applyFilters, applyQuantityStockGuard, isPurchasable } from '../src/uti
 import {
   fetchMomoCategory,
   fetchMomoProduct,
+  isMomoFunboxOfficial,
   momoStockStateFromGoodsStock,
+  parseMomoEnterpriseNo,
   parseMomoGoodsStock,
 } from '../src/platforms/momo.js';
 
@@ -53,26 +55,59 @@ test('parses goodsStock from escaped momo HTML payloads', () => {
   assert.equal(parseMomoGoodsStock('no stock field'), '');
 });
 
-test('live momo limited-sale listing does not notify CX-18 when quantity is 0', async () => {
+test('Funbox official shop is enterpriseNo 006093 / funbox toys 品牌旗艦店', () => {
+  const funbox = 'enterpriseNo\\":\\"006093\\",\\"brandName\\":\\"TAKARA TOMY\\",\\"itemTitle\\":\\"funbox toys\\",\\"itemDescription\\":\\"品牌旗艦店\\"';
+  const reseller = 'enterpriseNo\\":\\"020641\\",\\"brandName\\":\\"TAKARA TOMY\\",\\"配送方式\\":\\"廠商宅配\\"';
+  const sidebarOnly = '精選品牌 ASIA GOAL Tender Leaf FUNBOX ChingChing';
+  assert.equal(parseMomoEnterpriseNo(funbox), '006093');
+  assert.equal(parseMomoEnterpriseNo(reseller), '020641');
+  assert.equal(isMomoFunboxOfficial(funbox), true);
+  assert.equal(isMomoFunboxOfficial(reseller), false);
+  assert.equal(isMomoFunboxOfficial(sidebarOnly), false);
+});
+
+test('reseller momo pages do not match filters even when in stock', () => {
+  const product = {
+    platform: 'Momo',
+    name: '【TAKARA TOMY】戰鬥陀螺X UX-20 榮耀女武神 LF 入門套組',
+    stockState: 'IN_STOCK',
+    quantity: 29,
+    price: 'NT$2380',
+    isFunboxOfficial: false,
+    enterpriseNo: '020641',
+  };
+  const filter = applyFilters(product, CX18_RULE);
+  assert.equal(filter.matched, false);
+  assert.ok(filter.reasons.some((reason) => /Funbox/.test(reason)));
+  assert.equal(wouldNotify(product), false);
+});
+
+test('live momo category scan keeps Funbox CX-18 and drops reseller shops', async () => {
   const listing = await fetchMomoCategory({
     url: 'https://www.momoshop.com.tw/categories/2701202072',
+    ...CX18_RULE,
+  });
+  assert.ok(listing.listed > listing.products.length, 'toy-mall listings include non-Funbox shops');
+  listing.products.forEach((product) => {
+    assert.equal(product.isFunboxOfficial, true);
+    assert.equal(product.enterpriseNo, '006093');
   });
   const product = listing.products.find((item) => item.productId === '15670779');
-  assert.ok(product, 'CX-18+UX-02 (15670779) should be listed under 2701202072');
+  assert.ok(product, 'CX-18+UX-02 (15670779) is Funbox official');
+  assert.equal(listing.products.some((item) => item.productId === '15587337'), false);
   if (Number(product.quantity) <= 0) {
     assert.equal(product.stockState, 'OUT_OF_STOCK');
     assert.equal(wouldNotify(product), false);
-  } else {
-    assert.equal(product.stockState, 'IN_STOCK');
-    assert.equal(wouldNotify(product), true);
   }
 });
 
-test('live momo product page for 15670779 is out of stock while quantity is 0', async () => {
-  const product = await fetchMomoProduct('https://www.momoshop.com.tw/product/15670779');
-  assert.match(product.name, /CX-18/);
-  if (product.quantity === '' || Number(product.quantity) <= 0) {
-    assert.equal(product.stockState, 'OUT_OF_STOCK');
-    assert.equal(wouldNotify(product), false);
-  }
+test('live momo product page: CX-18 is Funbox; reseller UX-20 is not', async () => {
+  const official = await fetchMomoProduct('https://www.momoshop.com.tw/product/15670779');
+  const reseller = await fetchMomoProduct('https://www.momoshop.com.tw/product/15587337');
+  assert.match(official.name, /CX-18/);
+  assert.equal(official.enterpriseNo, '006093');
+  assert.equal(official.isFunboxOfficial, true);
+  assert.equal(reseller.isFunboxOfficial, false);
+  assert.notEqual(reseller.enterpriseNo, '006093');
+  assert.equal(wouldNotify(reseller), false);
 });

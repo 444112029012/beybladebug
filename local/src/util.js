@@ -86,6 +86,9 @@ export function applyFilters(product, rule) {
   if (maxPrice && price && price > maxPrice) {
     reasons.push(`price ${product.price} exceeds maximum ${maxPrice}`);
   }
+  if (product.platform === 'Momo' && product.isFunboxOfficial === false && product.stockState !== 'UNLISTED') {
+    reasons.push('not Funbox 品牌旗艦店');
+  }
   return { matched: reasons.length === 0, reasons };
 }
 
