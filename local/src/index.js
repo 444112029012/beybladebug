@@ -1,5 +1,5 @@
 import { loadConfig } from './config.js';
-import { applyFilters, applyQuantityStockGuard, formatStockMessage, hasQuantity, isPurchasable, notifyKindForStock, packedState, quantityPart, shouldNotifyStock, stockPart } from './util.js';
+import { applyFilters, applyQuantityStockGuard, formatStockMessage, hasQuantity, isPurchasable, notifyKindForStock, readSnapshot, shouldNotifyStock, writeSnapshot } from './util.js';
 import { loadState, saveState, stateKey } from './state.js';
 import { log, notify } from './notify.js';
 import { pollTelegramCommands } from './telegram.js';
@@ -34,13 +34,14 @@ async function handleProduct(config, state, rule, product) {
   const filter = applyFilters(product, rule);
   const key = stateKey(product);
   const previousRaw = state.values[key];
+  const previous = readSnapshot(previousRaw);
   let notified = 0;
   if (filter.matched && isPurchasable(product)) {
-    const previousStock = stockPart(previousRaw);
+    const previousStock = previous.stockState;
     const kind = previousStock !== 'IN_STOCK' ? (previousStock ? 'restock' : 'new') : 'in_stock';
     const notifyOpts = {
       notifyEveryInStock: config.notifyEveryInStock,
-      previousQuantity: quantityPart(previousRaw),
+      previousQuantity: previous.notifyQuantity,
       currentQuantity: hasQuantity(product) ? product.quantity : '',
     };
     const shouldNotify = shouldNotifyStock(product, kind, notifyOpts);
@@ -56,12 +57,16 @@ async function handleProduct(config, state, rule, product) {
     if (shouldNotify) {
       await notify(config, text);
       notified = 1;
-    } else {
-      log(`still in stock: ${product.platform} ${product.productId}`);
+    } else if (
+      hasQuantity(product)
+      && previous.quantity !== ''
+      && Number(previous.quantity) !== Number(product.quantity)
+    ) {
+      log(`qty ${product.platform} ${product.productId}: ${previous.quantity} → ${product.quantity} (alert baseline ${previous.notifyQuantity})`);
     }
   }
   if (product.stockState !== 'UNKNOWN') {
-    state.values[key] = packedState(product);
+    state.values[key] = writeSnapshot(product, previousRaw, notified === 1);
   }
   return notified;
 }

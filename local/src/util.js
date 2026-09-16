@@ -80,6 +80,56 @@ export function packedState(product) {
   return hasQuantity(product) ? `${product.stockState}|${product.quantity}` : product.stockState;
 }
 
+function snapshotNumber(value) {
+  if (value === undefined || value === null || value === '') return '';
+  const qty = Number(value);
+  return Number.isFinite(qty) ? qty : '';
+}
+
+export function readSnapshot(raw) {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const quantity = snapshotNumber(raw.quantity);
+    const notifyQuantity = raw.notifyQuantity === undefined || raw.notifyQuantity === ''
+      ? quantity
+      : snapshotNumber(raw.notifyQuantity);
+    return {
+      stockState: String(raw.stockState || ''),
+      quantity,
+      notifyQuantity,
+      name: String(raw.name || ''),
+      url: String(raw.url || ''),
+    };
+  }
+  const text = String(raw || '');
+  if (!text) return { stockState: '', quantity: '', notifyQuantity: '', name: '', url: '' };
+  const quantity = quantityPart(text);
+  return {
+    stockState: stockPart(text),
+    quantity,
+    notifyQuantity: quantity,
+    name: '',
+    url: '',
+  };
+}
+
+export function writeSnapshot(product, previousRaw, notified) {
+  applyQuantityStockGuard(product);
+  const prev = readSnapshot(previousRaw);
+  const quantity = hasQuantity(product) ? snapshotNumber(product.quantity) : '';
+  let notifyQuantity = prev.notifyQuantity;
+  if (notified && quantity !== '') notifyQuantity = quantity;
+  else if (notifyQuantity === '' && quantity !== '') notifyQuantity = quantity;
+  if (product.stockState && product.stockState !== 'IN_STOCK') notifyQuantity = quantity;
+  return {
+    stockState: product.stockState,
+    quantity,
+    notifyQuantity,
+    name: product.name || prev.name || '',
+    url: product.url || prev.url || '',
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 export const NOTIFY_QTY_DROP = 30;
 
 export function quantityDrop(previousQuantity, currentQuantity) {
@@ -127,10 +177,10 @@ export function applyFilters(product, rule) {
 }
 
 export function formatStockMessage(shop, kind, name, product, url, extra = {}) {
-  const title = kind === 'new' ? `${shop} 上架`
-    : kind === 'restock' ? `${shop} 補貨`
-      : kind === 'qty_drop' ? `${shop} 庫存下降`
-        : `${shop} 有貨`;
+  const title = kind === 'new' ? `[local] ${shop} 上架`
+    : kind === 'restock' ? `[local] ${shop} 補貨`
+      : kind === 'qty_drop' ? `[local] ${shop} 庫存下降`
+        : `[local] ${shop} 有貨`;
   const drop = quantityDrop(extra.previousQuantity, product && product.quantity);
   const qtyText = kind === 'qty_drop' && hasQuantity(product) && drop > 0
     ? `庫存 ${extra.previousQuantity} → ${product.quantity}（-${drop}）`

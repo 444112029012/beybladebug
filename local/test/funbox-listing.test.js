@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { formatStockMessage, isFunboxAppTicket, NOTIFY_QTY_DROP, shouldNotifyStock } from '../src/util.js';
+import { formatStockMessage, isFunboxAppTicket, NOTIFY_QTY_DROP, readSnapshot, shouldNotifyStock, writeSnapshot } from '../src/util.js';
 import { fetchFunboxCategory, funboxCategoryJsonUrl } from '../src/platforms/funbox.js';
 
 test('Funbox listing JSON matches the Chrome extension URL, without category_products query', () => {
@@ -47,6 +47,31 @@ test('local notifies new/restock, or when quantity drops by 30, not every in-sto
     formatStockMessage('Funbox', 'qty_drop', ticket.name, ticket, 'https://shop.funbox.com.tw/products/bbpr08914', {
       previousQuantity: 404,
     }),
-    /庫存下降[\s\S]*庫存 404 → 374（-30）/,
+    /\[local\] Funbox 庫存下降[\s\S]*庫存 404 → 374（-30）/,
   );
+});
+
+test('inventory snapshot keeps notifyQuantity across 1-unit polls until drop reaches 30', () => {
+  let snap = writeSnapshot({
+    platform: 'Funbox',
+    name: 'ticket',
+    url: 'https://shop.funbox.com.tw/products/bbpr08914',
+    stockState: 'IN_STOCK',
+    quantity: 404,
+  }, '', true);
+  assert.equal(snap.notifyQuantity, 404);
+  assert.equal(readSnapshot('IN_STOCK|404').notifyQuantity, 404);
+
+  for (let qty = 403; qty >= 375; qty -= 1) {
+    const opts = { previousQuantity: snap.notifyQuantity, currentQuantity: qty };
+    assert.equal(shouldNotifyStock({}, 'in_stock', opts), false);
+    snap = writeSnapshot({ stockState: 'IN_STOCK', quantity: qty, name: 'ticket' }, snap, false);
+    assert.equal(snap.quantity, qty);
+    assert.equal(snap.notifyQuantity, 404);
+  }
+
+  assert.equal(shouldNotifyStock({}, 'in_stock', { previousQuantity: snap.notifyQuantity, currentQuantity: 374 }), true);
+  snap = writeSnapshot({ stockState: 'IN_STOCK', quantity: 374, name: 'ticket' }, snap, true);
+  assert.equal(snap.notifyQuantity, 374);
+  assert.equal(snap.quantity, 374);
 });
