@@ -1,4 +1,4 @@
-import { stamp } from './util.js';
+import { splitTelegramText, stamp } from './util.js';
 
 export function log(message) {
   console.log(`[${stamp()}] ${message}`);
@@ -19,6 +19,16 @@ export async function sendTelegram(config, text) {
   });
   const json = await response.json().catch(() => ({}));
   return json.ok ? { ok: true } : { ok: false, message: json.description || `HTTP ${response.status}` };
+}
+
+export async function sendTelegramChunks(config, text) {
+  const chunks = splitTelegramText(text);
+  let last = { ok: true };
+  for (const chunk of chunks) {
+    last = await sendTelegram(config, chunk);
+    if (!last.ok) return last;
+  }
+  return last;
 }
 
 export async function notify(config, text) {

@@ -91,6 +91,8 @@ const AMAZON_BEYBLADE_SEARCH = {
   url: AMAZON_ORIGIN + '/s?k=%E3%83%99%E3%82%A4%E3%83%96%E3%83%AC%E3%83%BC%E3%83%89X&i=toys&rh=p_6%3AAN1VRQENFRJN5',
   name: 'Amazon.co.jp おもちゃ > ベイブレードX（Amazon.co.jpが販売）',
 };
+const NOTIFY_QTY_DROP = 50;
+const TELEGRAM_MAX_CHARS = 3900;
 
 function onOpen() {
   SpreadsheetApp.getUi()
@@ -99,6 +101,7 @@ function onOpen() {
     .addSeparator()
     .addItem('Test Telegram notification', 'testTelegramConnection')
     .addItem('Send status to Telegram', 'sendWatchStatusToTelegram')
+    .addItem('Send inventory to Telegram', 'sendInventoryToTelegram')
     .addItem('Find Telegram chat ID', 'findTelegramChatId')
     .addItem('Diagnose selected rule URL', 'diagnoseSelectedRule')
     .addItem('Probe selected momo, Funbox, Amazon or MM rule', 'probeSelectedMomoProduct')
@@ -170,6 +173,11 @@ function sendWatchStatusToTelegram() {
   SpreadsheetApp.getUi().alert(result.ok ? 'Status sent to Telegram.' : `Telegram status failed: ${result.message}`);
 }
 
+function sendInventoryToTelegram() {
+  const result = sendTelegramChunks_(buildInventoryText_());
+  SpreadsheetApp.getUi().alert(result.ok ? 'Inventory sent to Telegram.' : `Telegram inventory failed: ${result.message}`);
+}
+
 function pollTelegramCommands_() {
   const props = PropertiesService.getScriptProperties();
   const token = props.getProperty('TELEGRAM_BOT_TOKEN');
@@ -188,6 +196,7 @@ function pollTelegramCommands_() {
     if (!message || !message.chat || String(message.chat.id) !== expectedChatId) return;
     const command = telegramCommand_(message.text);
     if (command === 'status') sendTelegram_(buildWatchStatusText_());
+    else if (command === 'stock') sendTelegramChunks_(buildInventoryText_());
     else if (command === 'help') sendTelegram_(telegramHelpText_());
   });
   if (nextOffset) props.setProperty('TELEGRAM_UPDATE_OFFSET', nextOffset);
@@ -195,7 +204,7 @@ function pollTelegramCommands_() {
 
 function ensureTelegramBotCommands_(token) {
   const props = PropertiesService.getScriptProperties();
-  if (props.getProperty('TELEGRAM_COMMANDS_SET') === '4') return;
+  if (props.getProperty('TELEGRAM_COMMANDS_SET') === '5') return;
   UrlFetchApp.fetch(`https://api.telegram.org/bot${token}/setMyCommands`, {
     method: 'post',
     contentType: 'application/json',
@@ -203,19 +212,21 @@ function ensureTelegramBotCommands_(token) {
       commands: [
         { command: 'status', description: '查看試算表 GAS 運作狀況' },
         { command: 'status_local', description: '查看本地 watcher 運作狀況' },
+        { command: 'stock', description: '列出目前有貨庫存' },
         { command: 'help', description: '可用指令' },
       ],
     }),
     muteHttpExceptions: true,
   });
-  props.setProperty('TELEGRAM_COMMANDS_SET', '4');
+  props.setProperty('TELEGRAM_COMMANDS_SET', '5');
 }
 
 function telegramCommand_(text) {
   const value = String(text || '').trim();
   if (!value) return '';
-  const command = firstMatch_(value, /^\/([a-zA-Z]+)(?:@\w+)?(?:\s|$)/);
+  const command = firstMatch_(value, /^\/([a-zA-Z0-9_]+)(?:@\w+)?(?:\s|$)/);
   if (/^status$/i.test(command) || /^(狀況|運作狀況|status)$/i.test(value)) return 'status';
+  if (/^(stock|inventory)$/i.test(command) || /^(庫存|列出庫存|stock|inventory)$/i.test(value)) return 'stock';
   if (/^(help|start)$/i.test(command) || /^(說明|幫助)$/.test(value)) return 'help';
   return '';
 }
@@ -224,9 +235,11 @@ function telegramHelpText_() {
   return [
     'Beyblade watcher 指令',
     '/status 或「狀況」— 查看 momo / Funbox / Amazon / MM 最近檢查是否有在跑',
+    '/stock 或「庫存」— 列出目前有貨商品與數量',
     '/help — 顯示這段說明',
-    '補貨與新品仍會自動推播。機器人只在每次定時檢查時讀取訊息，回覆最多會晚一個檢查間隔。',
-    '若要立刻看到狀況，也可在試算表用 Beyblade Watcher > Send status to Telegram。',
+    '新品與補貨會自動推播。持續有貨時，庫存要比上次推播再少 50 以上才會再通知。',
+    '機器人只在每次定時檢查時讀取訊息，回覆最多會晚一個檢查間隔。',
+    '若要立刻看到狀況或庫存，也可在試算表用 Beyblade Watcher 選單。',
   ].join('\n');
 }
 
@@ -262,8 +275,85 @@ function buildWatchStatusText_() {
   });
   const disabled = rules.length - enabled.length;
   if (disabled > 0) lines.push(`另有 ${disabled} 列已停用。`);
-  lines.push('在 Telegram 傳 /status 可再查一次；回覆會等到下一次定時檢查。');
+  lines.push('在 Telegram 傳 /status 可再查一次、/stock 可列出庫存；回覆會等到下一次定時檢查。');
   return lines.join('\n').slice(0, 3900);
+}
+
+function buildInventoryText_() {
+  const rows = inventoryRowsFromProductsSheet_();
+  return formatInventoryText_(rows, new Date());
+}
+
+function inventoryRowsFromProductsSheet_() {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(SHEETS.PRODUCTS);
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, PRODUCT_HEADERS.length).getValues();
+  const rows = [];
+  values.forEach((row) => {
+    const stockState = String(row[6] || '');
+    if (stockState !== 'IN_STOCK') return;
+    const platform = String(row[2] || 'Momo');
+    const rawQty = row[7];
+    const parsedQty = Number(rawQty);
+    rows.push({
+      platform,
+      name: String(row[3] || ''),
+      url: String(row[4] || ''),
+      quantity: rawQty === '' || rawQty === null || rawQty === undefined || isNaN(parsedQty) ? '' : parsedQty,
+      stockState,
+      shop: shopLabel_(platform),
+    });
+  });
+  return rows;
+}
+
+function shopLabel_(platform) {
+  const value = String(platform || '').toLowerCase();
+  if (value === 'funbox') return 'Funbox';
+  if (value === 'amazon') return 'Amazon';
+  if (value === 'mm' || value === 'mm小舖') return 'MM小舖';
+  return 'momo';
+}
+
+function shopSortKey_(shop) {
+  if (shop === 'momo') return 1;
+  if (shop === 'Funbox') return 2;
+  if (shop === 'MM小舖') return 3;
+  if (shop === 'Amazon') return 4;
+  return 9;
+}
+
+function formatInventoryText_(rows, now) {
+  const items = (rows || []).slice().sort((a, b) => {
+    const shopCmp = shopSortKey_(a.shop) - shopSortKey_(b.shop);
+    if (shopCmp) return shopCmp;
+    const qtyA = Number(a.quantity);
+    const qtyB = Number(b.quantity);
+    if (!isNaN(qtyB) && !isNaN(qtyA) && qtyB !== qtyA) return qtyB - qtyA;
+    return String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hant');
+  });
+  const lines = [
+    'Beyblade 目前庫存',
+    `現在：${formatWatchTime_(now)}`,
+  ];
+  if (!items.length) {
+    lines.push('目前沒有有貨商品。');
+    return lines.join('\n');
+  }
+  lines.push(`有貨 ${items.length} 件`);
+  let shop = '';
+  items.forEach((item) => {
+    if (item.shop !== shop) {
+      shop = item.shop;
+      lines.push('');
+      lines.push(shop);
+    }
+    const qty = hasQuantity_(item) ? `庫存 ${item.quantity}` : '有貨';
+    lines.push(`· ${item.name || '未命名商品'}`);
+    lines.push(`  ${qty}`);
+    if (item.url) lines.push(`  ${item.url}`);
+  });
+  return lines.join('\n');
 }
 
 function describeWatchTrigger_() {
@@ -506,7 +596,7 @@ function checkMomoProductRule_(rule, props) {
   const { product, filter } = evaluateMomoRule_(rule);
   const stateKey = `MOMO_PRODUCT_STATE_${product.productId}`;
   const previousRaw = props.getProperty(stateKey);
-  const notified = recordAndNotifyInStock_(props, stateKey, product, filter, (kind) => formatMomoTelegram_(product, kind));
+  const notified = recordAndNotifyInStock_(props, stateKey, product, filter, (kind, extra) => formatMomoTelegram_(product, kind, extra));
   updateRuleCheck_(rule.row, formatInStockFilterNote_(formatMomoSummary_(product, filter), previousRaw, product, filter));
   return notified;
 }
@@ -517,7 +607,7 @@ function checkMomoCategoryRule_(rule, props) {
   listing.products.forEach((product) => {
     const filter = applyMomoFilters_(product, rule);
     const stateKey = `MOMO_PRODUCT_STATE_${product.productId}`;
-    notified += recordAndNotifyInStock_(props, stateKey, product, filter, (kind) => formatMomoTelegram_(product, kind, listing.path));
+    notified += recordAndNotifyInStock_(props, stateKey, product, filter, (kind, extra) => formatMomoTelegram_(product, kind, extra));
   });
   const matched = listing.products.filter((product) => applyMomoFilters_(product, rule).matched);
   const summary = `${formatMomoCategorySummary_(listing, matched)} notified=${notified}.`;
@@ -529,7 +619,7 @@ function checkFunboxProductRule_(rule, props) {
   const { product, filter } = evaluateFunboxRule_(rule);
   const stateKey = `FUNBOX_PRODUCT_STATE_${product.productId}`;
   const previousRaw = props.getProperty(stateKey);
-  const notified = recordAndNotifyInStock_(props, stateKey, product, filter, (kind) => formatFunboxTelegram_(product, kind));
+  const notified = recordAndNotifyInStock_(props, stateKey, product, filter, (kind, extra) => formatFunboxTelegram_(product, kind, extra));
   updateRuleCheck_(rule.row, formatInStockFilterNote_(formatFunboxSummary_(product, filter), previousRaw, product, filter));
   return notified;
 }
@@ -541,7 +631,7 @@ function checkFunboxCategoryRule_(rule, props) {
   listing.products.forEach((product) => {
     const filter = applyMomoFilters_(product, rule);
     const stateKey = `FUNBOX_PRODUCT_STATE_${product.productId}`;
-    notified += recordAndNotifyInStock_(props, stateKey, product, filter, (kind) => formatFunboxTelegram_(product, kind, listing.path));
+    notified += recordAndNotifyInStock_(props, stateKey, product, filter, (kind, extra) => formatFunboxTelegram_(product, kind, extra));
     if (!(filter.matched && isPurchasable_(product)) && skipNotes.length < 4) {
       skipNotes.push(telegramSkipNote_(product, filter));
     }
@@ -556,7 +646,7 @@ function checkAmazonProductRule_(rule, props) {
   const { product, filter } = evaluateAmazonRule_(rule);
   const stateKey = `AMAZON_PRODUCT_STATE_${product.productId}`;
   const previousRaw = props.getProperty(stateKey);
-  const notified = recordAndNotifyInStock_(props, stateKey, product, filter, (kind) => formatAmazonTelegram_(product, kind));
+  const notified = recordAndNotifyInStock_(props, stateKey, product, filter, (kind, extra) => formatAmazonTelegram_(product, kind, extra));
   updateRuleCheck_(rule.row, formatInStockFilterNote_(formatAmazonSummary_(product, filter), previousRaw, product, filter));
   return notified;
 }
@@ -567,7 +657,7 @@ function checkAmazonSearchRule_(rule, props) {
   listing.products.forEach((product) => {
     const filter = applyMomoFilters_(product, rule);
     const stateKey = `AMAZON_PRODUCT_STATE_${product.productId}`;
-    notified += recordAndNotifyInStock_(props, stateKey, product, filter, (kind) => formatAmazonTelegram_(product, kind, listing.path));
+    notified += recordAndNotifyInStock_(props, stateKey, product, filter, (kind, extra) => formatAmazonTelegram_(product, kind, extra));
   });
   const matched = listing.products.filter((product) => applyMomoFilters_(product, rule).matched);
   const summary = `${formatAmazonSearchSummary_(listing, matched)} notified=${notified}.`;
@@ -579,7 +669,7 @@ function checkMmProductRule_(rule, props) {
   const { product, filter } = evaluateMmRule_(rule);
   const stateKey = `MM_PRODUCT_STATE_${product.productId}`;
   const previousRaw = props.getProperty(stateKey);
-  const notified = recordAndNotifyInStock_(props, stateKey, product, filter, (kind) => formatMmTelegram_(product, kind));
+  const notified = recordAndNotifyInStock_(props, stateKey, product, filter, (kind, extra) => formatMmTelegram_(product, kind, extra));
   updateRuleCheck_(rule.row, formatInStockFilterNote_(formatMmSummary_(product, filter), previousRaw, product, filter));
   return notified;
 }
@@ -591,7 +681,7 @@ function checkMmListingRule_(rule, props) {
   listing.products.forEach((product) => {
     const filter = applyMomoFilters_(product, rule);
     const stateKey = `MM_PRODUCT_STATE_${product.productId}`;
-    notified += recordAndNotifyInStock_(props, stateKey, product, filter, (kind) => formatMmTelegram_(product, kind, listing.path));
+    notified += recordAndNotifyInStock_(props, stateKey, product, filter, (kind, extra) => formatMmTelegram_(product, kind, extra));
     if (!(filter.matched && isPurchasable_(product)) && skipNotes.length < 4) {
       skipNotes.push(telegramSkipNote_(product, filter));
     }
@@ -821,8 +911,8 @@ function formatMomoSummary_(product, filter) {
   return `momo product ${product.productId}: ${product.stockState}; ${qtyText}; ${product.name || 'name not parsed'}; ${product.price || 'price not parsed'}; ${filterText}.`;
 }
 
-function formatMomoTelegram_(product, kind, categoryPath) {
-  return formatUserStockTelegram_('momo', kind, product.name || `商品 ${product.productId}`, product, product.url);
+function formatMomoTelegram_(product, kind, extra) {
+  return formatUserStockTelegram_('momo', kind, product.name || `商品 ${product.productId}`, product, product.url, extra);
 }
 
 function formatMomoCategorySummary_(listing, matched) {
@@ -1303,8 +1393,8 @@ function formatFunboxSummary_(product, filter) {
   return `Funbox product ${product.productId}: ${product.stockState}; ${qtyText}; ${product.name || 'name not parsed'}; ${product.price || 'price not parsed'}; ${filterText}.`;
 }
 
-function formatFunboxTelegram_(product, kind, categoryPath) {
-  return formatUserStockTelegram_('Funbox', kind, product.name || `商品 ${product.productId}`, product, product.url);
+function formatFunboxTelegram_(product, kind, extra) {
+  return formatUserStockTelegram_('Funbox', kind, product.name || `商品 ${product.productId}`, product, product.url, extra);
 }
 
 function formatFunboxCategorySummary_(listing, matched) {
@@ -1565,8 +1655,8 @@ function formatMmSummary_(product, filter) {
   return `MM product ${product.productId}: ${product.stockState}; ${qtyText}; ${product.name || 'name not parsed'}; ${product.price || 'price not parsed'}; ${filterText}.`;
 }
 
-function formatMmTelegram_(product, kind, categoryPath) {
-  return formatUserStockTelegram_('MM小舖', kind, product.name || `商品 ${product.productId}`, product, product.url);
+function formatMmTelegram_(product, kind, extra) {
+  return formatUserStockTelegram_('MM小舖', kind, product.name || `商品 ${product.productId}`, product, product.url, extra);
 }
 
 function formatMmListingSummary_(listing, matched) {
@@ -1804,11 +1894,11 @@ function formatAmazonSummary_(product, filter) {
   return `Amazon product ${product.productId}: ${product.stockState}; ${product.name || 'name not parsed'}; ${product.price || 'price not parsed'}; ${filterText}.`;
 }
 
-function formatAmazonTelegram_(product, kind, searchPath) {
+function formatAmazonTelegram_(product, kind, extra) {
   const name = product.name && !amazonLooksLikeUrl_(product.name)
     ? product.name
     : `ASIN ${product.productId}`;
-  return formatUserStockTelegram_('Amazon', kind, name, product, canonicalAmazonProductUrl_(product.productId));
+  return formatUserStockTelegram_('Amazon', kind, name, product, canonicalAmazonProductUrl_(product.productId), extra);
 }
 
 function formatAmazonSearchSummary_(listing, matched) {
@@ -1864,11 +1954,19 @@ function telegramSkipNote_(product, filter) {
   return `${product.productId} filters missed (${filter.reasons.join('; ')})`;
 }
 
-function formatUserStockTelegram_(shop, kind, name, product, url) {
-  const title = kind === 'new' ? `${shop} 上架` : kind === 'restock' ? `${shop} 補貨` : `${shop} 有貨`;
+function formatUserStockTelegram_(shop, kind, name, product, url, extra) {
+  extra = extra || {};
+  const title = kind === 'new' ? `${shop} 上架`
+    : kind === 'restock' ? `${shop} 補貨`
+      : kind === 'qty_drop' ? `${shop} 庫存下降`
+        : `${shop} 有貨`;
+  const drop = quantityDrop_(extra.previousQuantity, product && product.quantity);
+  const qtyText = kind === 'qty_drop' && hasQuantity_(product) && drop > 0
+    ? `庫存 ${extra.previousQuantity} → ${product.quantity}（-${drop}）`
+    : hasQuantity_(product) ? `庫存 ${product.quantity}` : '';
   const details = [
     product.price || '',
-    hasQuantity_(product) ? `庫存 ${product.quantity}` : '',
+    qtyText,
   ].filter(Boolean).join(' · ');
   return [title, name, details, url].filter(Boolean).join('\n');
 }
@@ -1894,9 +1992,52 @@ function stockPart_(raw) {
   return String(raw || '').split('|')[0];
 }
 
-function packedState_(product) {
+function quantityPart_(raw) {
+  const parts = String(raw || '').split('|');
+  if (parts.length < 2 || parts[1] === '') return '';
+  const qty = Number(parts[1]);
+  return isNaN(qty) ? '' : qty;
+}
+
+function notifyQuantityPart_(raw) {
+  const parts = String(raw || '').split('|');
+  if (parts.length >= 3 && parts[2] !== '') {
+    const qty = Number(parts[2]);
+    return isNaN(qty) ? '' : qty;
+  }
+  return quantityPart_(raw);
+}
+
+function packedState_(product, notifyQuantity) {
   applyQuantityStockGuard_(product);
-  return hasQuantity_(product) ? `${product.stockState}|${product.quantity}` : product.stockState;
+  if (!hasQuantity_(product)) return product.stockState;
+  let baseline = notifyQuantity;
+  if (baseline === undefined || baseline === null || baseline === '') {
+    baseline = product.quantity;
+  }
+  if (product.stockState && product.stockState !== 'IN_STOCK') baseline = product.quantity;
+  return `${product.stockState}|${product.quantity}|${baseline}`;
+}
+
+function quantityDrop_(previousQuantity, currentQuantity) {
+  const prev = Number(previousQuantity);
+  const cur = Number(currentQuantity);
+  if (isNaN(prev) || isNaN(cur)) return 0;
+  return prev - cur;
+}
+
+function shouldNotifyStock_(kind, options) {
+  options = options || {};
+  if (kind !== 'in_stock') return true;
+  return quantityDrop_(options.previousQuantity, options.currentQuantity) >= NOTIFY_QTY_DROP;
+}
+
+function notifyKindForStock_(kind, options) {
+  options = options || {};
+  if (kind === 'in_stock' && quantityDrop_(options.previousQuantity, options.currentQuantity) >= NOTIFY_QTY_DROP) {
+    return 'qty_drop';
+  }
+  return kind;
 }
 
 function formatQuantityPreview_(products) {
@@ -1930,17 +2071,24 @@ function recordAndNotifyInStock_(props, stateKey, product, filter, telegramFacto
   const previousRaw = props.getProperty(stateKey);
   upsertProductSnapshot_(product);
   let notified = 0;
+  const previousNotifyQty = notifyQuantityPart_(previousRaw);
   if (filter.matched && isPurchasable_(product)) {
     const previousStock = stockPart_(previousRaw);
     const kind = previousStock !== 'IN_STOCK' ? (previousStock ? 'restock' : 'new') : 'in_stock';
-    if (!(kind === 'in_stock' && isFunboxAppTicket_(product))) {
-      const result = sendTelegram_(telegramFactory(kind));
+    const notifyOpts = {
+      previousQuantity: previousNotifyQty,
+      currentQuantity: hasQuantity_(product) ? product.quantity : '',
+    };
+    if (shouldNotifyStock_(kind, notifyOpts)) {
+      const extra = { previousQuantity: previousNotifyQty };
+      const result = sendTelegram_(telegramFactory(notifyKindForStock_(kind, notifyOpts), extra));
       if (!result.ok) throw new Error(`Telegram: ${result.message}`);
       notified = 1;
     }
   }
-  if (product.stockState !== 'UNKNOWN' && packedState_(product) !== previousRaw) {
-    props.setProperty(stateKey, packedState_(product));
+  const nextPacked = packedState_(product, notified ? product.quantity : previousNotifyQty);
+  if (product.stockState !== 'UNKNOWN' && nextPacked !== previousRaw) {
+    props.setProperty(stateKey, nextPacked);
   }
   return notified;
 }
@@ -2064,6 +2212,34 @@ function htmlDecode_(value) {
 
 function cleanText_(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function splitTelegramText_(text, max) {
+  const limit = max || TELEGRAM_MAX_CHARS;
+  const value = String(text || '');
+  if (!value) return [''];
+  if (value.length <= limit) return [value];
+  const chunks = [];
+  let rest = value;
+  while (rest.length > limit) {
+    let cut = rest.lastIndexOf('\n\n', limit);
+    if (cut < limit * 0.4) cut = rest.lastIndexOf('\n', limit);
+    if (cut < limit * 0.4) cut = limit;
+    chunks.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut).trim();
+  }
+  if (rest) chunks.push(rest);
+  return chunks;
+}
+
+function sendTelegramChunks_(text) {
+  const chunks = splitTelegramText_(text);
+  let last = { ok: true };
+  for (let i = 0; i < chunks.length; i++) {
+    last = sendTelegram_(chunks[i]);
+    if (!last.ok) return last;
+  }
+  return last;
 }
 
 function sendTelegram_(text) {

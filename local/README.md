@@ -19,11 +19,11 @@ node src/index.js --interval 30
 
 `--interval` is seconds and overrides `.env` `POLL_INTERVAL_SECONDS` and `watch.rules.json`.
 
-While it is running, Telegram `/status_local` or `STATUS_LOCAL` returns last-checked time for the local watcher. `/status` is for the Sheet GAS watcher. `/help` lists commands. The bot menu should show both `status` and `status_local`. Replies are usually within a couple of seconds. Both programs share `getUpdates` on the same bot; if a command seems ignored, only one of them may have consumed it.
+While it is running, Telegram `/status_local` or `STATUS_LOCAL` returns last-checked time for the local watcher. `/stock` or `庫存` lists currently in-stock items and quantities from the last check. `/status` is for the Sheet GAS watcher. `/help` lists commands. The bot menu should show `status`, `status_local`, and `stock`. Replies are usually within a couple of seconds. Both programs share `getUpdates` on the same bot; if a command seems ignored, only one of them may have consumed it.
 
 ## Notify policy
 
-By default Telegram only fires on **new**, **restock**, or when quantity has dropped by **30** since the last alert. That baseline is stored per SKU in `data/state.json` (`notifyQuantity`); high-frequency polls that drop 1–2 units do not reset it. It does **not** alert every cycle while still in stock. Set `"notifyEveryInStock": true` in `watch.rules.json` only if you want the old every-cycle behaviour. Every check still prints a one-line summary in the terminal.
+By default Telegram only fires on **new**, **restock**, or when quantity has dropped by **50** since the last alert. That baseline is stored per SKU in `data/state.json` (`notifyQuantity`); high-frequency polls that drop 1–2 units do not reset it. It does **not** alert every cycle while still in stock. Set `"notifyEveryInStock": true` in `watch.rules.json` only if you want the old every-cycle behaviour. Every check still prints a one-line summary in the terminal.
 
 State is stored in `data/state.json` (gitignored). Closing the terminal with Ctrl+C saves state and exits. Shutting the PC down without Ctrl+C just kills the process; it does **not** keep running. Start `node src/index.js` again after boot. Sudden power-off during a write falls back to `state.json.bak`.
 

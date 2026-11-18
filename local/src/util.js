@@ -130,7 +130,7 @@ export function writeSnapshot(product, previousRaw, notified) {
   };
 }
 
-export const NOTIFY_QTY_DROP = 30;
+export const NOTIFY_QTY_DROP = 50;
 
 export function quantityDrop(previousQuantity, currentQuantity) {
   const prev = Number(previousQuantity);
@@ -194,4 +194,94 @@ export function formatStockMessage(shop, kind, name, product, url, extra = {}) {
 
 export function stamp() {
   return new Date().toISOString().replace('T', ' ').slice(0, 19);
+}
+
+export const TELEGRAM_MAX_CHARS = 3900;
+
+export function splitTelegramText(text, max = TELEGRAM_MAX_CHARS) {
+  const value = String(text || '');
+  if (!value) return [''];
+  if (value.length <= max) return [value];
+  const chunks = [];
+  let rest = value;
+  while (rest.length > max) {
+    let cut = rest.lastIndexOf('\n\n', max);
+    if (cut < max * 0.4) cut = rest.lastIndexOf('\n', max);
+    if (cut < max * 0.4) cut = max;
+    chunks.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut).trim();
+  }
+  if (rest) chunks.push(rest);
+  return chunks;
+}
+
+export function shopLabel(platform) {
+  const value = String(platform || '').toLowerCase();
+  if (value === 'funbox') return 'Funbox';
+  if (value === 'amazon') return 'Amazon';
+  if (value === 'mm' || value === 'mm小舖') return 'MM小舖';
+  return 'momo';
+}
+
+export function inventoryRowsFromState(state) {
+  const values = (state && state.values) || {};
+  return Object.keys(values).map((key) => {
+    const snap = readSnapshot(values[key]);
+    const parts = String(key || '').split('|');
+    const platform = parts[0] || '';
+    const productId = parts.slice(1).join('|');
+    return {
+      platform,
+      productId,
+      name: snap.name || `商品 ${productId}`,
+      url: snap.url || '',
+      quantity: snap.quantity,
+      stockState: snap.stockState,
+      shop: shopLabel(platform),
+    };
+  }).filter((row) => row.stockState === 'IN_STOCK');
+}
+
+function shopSortKey(shop) {
+  const order = { momo: 1, Funbox: 2, MM小舖: 3, Amazon: 4 };
+  return order[shop] || 9;
+}
+
+export function formatInventoryText(rows, now = Date.now()) {
+  const items = (rows || []).slice().sort((a, b) => {
+    const shopCmp = shopSortKey(a.shop) - shopSortKey(b.shop);
+    if (shopCmp) return shopCmp;
+    const qtyA = Number(a.quantity);
+    const qtyB = Number(b.quantity);
+    if (Number.isFinite(qtyB) && Number.isFinite(qtyA) && qtyB !== qtyA) return qtyB - qtyA;
+    return String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hant');
+  });
+  const lines = [
+    'Beyblade 目前庫存',
+    `現在：${stampFor(now)}`,
+  ];
+  if (!items.length) {
+    lines.push('目前沒有有貨商品。');
+    return lines.join('\n');
+  }
+  lines.push(`有貨 ${items.length} 件`);
+  let shop = '';
+  items.forEach((item) => {
+    if (item.shop !== shop) {
+      shop = item.shop;
+      lines.push('', shop);
+    }
+    const qty = hasQuantity(item) ? `庫存 ${item.quantity}` : '有貨';
+    lines.push(`· ${item.name}`);
+    lines.push(`  ${qty}`);
+    if (item.url) lines.push(`  ${item.url}`);
+  });
+  return lines.join('\n').slice(0, 12000);
+}
+
+function stampFor(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
