@@ -35,8 +35,8 @@ The bot can report whether momo and Funbox checks are still running. It does **n
 
 1. Paste the updated `Code.gs`, save, and reload the Sheet.
 2. Keep the repeating check installed.
-3. In Telegram, send `/status` or `狀況`. Within one check interval you should get last-checked time and Status for each enabled rule. `/help` lists commands.
-4. For an immediate snapshot, use **Beyblade Watcher > Send status to Telegram**.
+3. In Telegram, send `/status` or `狀況`. Within one check interval you should get last-checked time and Status for each enabled rule. `/stock` or `庫存` lists currently in-stock items and quantities from the last check. `/help` lists commands.
+4. For an immediate snapshot, use **Beyblade Watcher > Send status to Telegram** or **Send inventory to Telegram**.
 
 A `⚠ 可能已停止` line means that rule has not been updated for about three check intervals. Confirm **Apps Script > Executions** if that appears.
 
@@ -65,7 +65,7 @@ Category listings do not include that shop id, so the watcher opens each keyword
 
 Example: `https://momo.dm/yuayuU` (CX-18+UX-02, product `15670779`) is Funbox `006093` and currently lives under **玩具 > 戰鬥陀螺★限量發售**. Reseller UX-20 listings in 人氣IP are ignored.
 
-A listed item with `goodsStock` 0 is treated as out of stock (no Telegram). Telegram is also skipped if quantity is present and `<= 0`, even if a listing was still labelled in stock. When any of those categories lists a matching item with quantity greater than 0, Telegram is sent.
+A listed item with `goodsStock` 0 is treated as out of stock (no Telegram). Telegram is also skipped if quantity is present and `<= 0`, even if a listing was still labelled in stock. New listings and restocks still notify. While an item stays in stock, Telegram waits until quantity has dropped by **50** or more since the last alert for that SKU.
 
 On 2026-08-19 the brand-flagship category showed `很抱歉，沒有篩選到符合條件的商品`. The two older SKUs still have product pages and remain on **Watch Rules** as product URLs so a restock can be detected after the category hides them:
 

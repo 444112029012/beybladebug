@@ -1,4 +1,5 @@
-import { sendTelegram } from './notify.js';
+import { sendTelegram, sendTelegramChunks } from './notify.js';
+import { formatInventoryText, inventoryRowsFromState } from './util.js';
 
 function shortUrl(url) {
   return String(url || '')
@@ -26,6 +27,10 @@ export function telegramCommand(text) {
   if (/^status_local$/i.test(command) || /^status_local$/i.test(value) || value === 'STATUS_LOCAL') {
     return 'status_local';
   }
+  if (/^(stock|stock_local|inventory)$/i.test(command)
+    || /^(stock|inventory|庫存|列出庫存)$/i.test(value)) {
+    return 'stock';
+  }
   if (/^(help|start)$/i.test(command) || /^(說明|幫助)$/.test(value)) return 'help';
   return '';
 }
@@ -35,8 +40,10 @@ export function helpText(intervalSeconds) {
     'Beyblade local watcher 指令',
     '/status — 試算表 GAS 運作狀況（若 GAS 有在跑）',
     '/status_local 或 STATUS_LOCAL — 本機 watcher 最近一次檢查',
+    '/stock 或「庫存」— 列出目前有貨商品與數量（上次檢查快照）',
     '/help — 顯示這段說明',
     `本地程式正在跑，約每 ${intervalSeconds} 秒檢查一次。回覆通常在數秒內。`,
+    '持續有貨時，庫存要比上次推播再少 50 以上才會再通知。',
     '試算表 GAS 仍用 /status。',
   ].join('\n');
 }
@@ -63,12 +70,16 @@ export function buildStatusText(config, state) {
   });
   const disabled = config.rules.length - enabled.length;
   if (disabled > 0) lines.push(`另有 ${disabled} 條已停用。`);
-  lines.push('在 Telegram 傳 /status_local 可再查一次。');
+  lines.push('在 Telegram 傳 /status_local 可再查一次；/stock 可列出目前庫存。');
   return lines.join('\n').slice(0, 3900);
 }
 
+export function buildInventoryText(state, now = Date.now()) {
+  return formatInventoryText(inventoryRowsFromState(state), now);
+}
+
 export async function ensureBotCommands(config, state) {
-  if (!config.telegramToken || state.meta.commandsSet === 'status_and_local') return;
+  if (!config.telegramToken || state.meta.commandsSet === 'status_stock_local') return;
   await fetch(`https://api.telegram.org/bot${config.telegramToken}/setMyCommands`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -76,11 +87,12 @@ export async function ensureBotCommands(config, state) {
       commands: [
         { command: 'status', description: '查看試算表 GAS 運作狀況' },
         { command: 'status_local', description: '查看本地 watcher 運作狀況' },
+        { command: 'stock', description: '列出目前有貨庫存' },
         { command: 'help', description: '可用指令' },
       ],
     }),
   }).catch(() => {});
-  state.meta.commandsSet = 'status_and_local';
+  state.meta.commandsSet = 'status_stock_local';
 }
 
 export async function pollTelegramCommands(config, state) {
@@ -97,6 +109,7 @@ export async function pollTelegramCommands(config, state) {
     if (!message || !message.chat || String(message.chat.id) !== String(config.telegramChatId)) continue;
     const command = telegramCommand(message.text);
     if (command === 'status_local') await sendTelegram(config, buildStatusText(config, state));
+    else if (command === 'stock') await sendTelegramChunks(config, buildInventoryText(state));
     else if (command === 'help') await sendTelegram(config, helpText(config.intervalSeconds));
   }
   if (nextOffset) state.meta.telegramOffset = nextOffset;
